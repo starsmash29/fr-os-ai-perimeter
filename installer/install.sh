@@ -67,7 +67,9 @@ verify_bundle() {
     # release page's sum (or a signature) -- see README, "Install".
     (cd "$HERE" && sha256sum --quiet --strict -c SHA256SUMS) || die "the bundle does not match SHA256SUMS"
     set -- "$HERE"/*.whl
-    [ "$#" -eq 1 ] && [ -f "$1" ] || die "expected exactly one wheel next to $0"
+    if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+        die "expected exactly one wheel next to $0"
+    fi
     WHEEL=$1
     for f in fr-ai-assist.socket fr-ai-assist.service fr-webui.service.d/ai-perimeter.conf; do
         [ -f "$HERE/systemd/$f" ] || die "systemd/$f is missing from the bundle"

@@ -83,7 +83,9 @@ pid=$(systemctl show -p MainPID --value fr-ai-assist)
 uid=$(stat -c %u "/proc/$pid")
 echo "fr-ai-assist runs as uid $uid"
 # systemd's DynamicUser= range.
-[ "$uid" -ge 61184 ] && [ "$uid" -le 65519 ] || fail "fr-ai-assist is not a dynamic account (uid $uid)"
+if [ "$uid" -lt 61184 ] || [ "$uid" -gt 65519 ]; then
+    fail "fr-ai-assist is not a dynamic account (uid $uid)"
+fi
 systemd-analyze security fr-ai-assist.service | tail -n 1
 
 step "the screen in FR_OS's running webUI"
@@ -116,7 +118,9 @@ command -v fr-webui-ai >/dev/null && fail "fr-webui-ai is still installed"
 wait_for_webui
 [ "$(status_of /ai-perimeter)" = 404 ] || fail "the screen is still served after --uninstall"
 "$INSTALL" --purge
-[ ! -e /etc/fr_os/ai-perimeter.yaml ] && [ ! -e /etc/fr_os/ai-perimeter ] || fail "--purge left settings"
+if [ -e /etc/fr_os/ai-perimeter.yaml ] || [ -e /etc/fr_os/ai-perimeter ]; then
+    fail "--purge left settings"
+fi
 wait_for_webui
 
 printf '\nPASS\n'
