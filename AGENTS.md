@@ -19,6 +19,7 @@ docs/security-lessons.md, cited by ID):
   standard library.
 - Every change comes with tests. Prefer the real thing (a real local HTTP
   server, real FR_OS functions) over mocks. Never weaken or skip a test.
-- FR_OS changes go in `integration/fr_os/` as marked patches, never as copied
-  FR_OS code.
+- No FR_OS file is changed (FR_OS's integrity check, SEC-15): the AI-Perimeter
+  joins FR_OS from outside (`integration/fr_os/README.md`). An unavoidable FR_OS
+  change goes there as a marked patch, never as copied FR_OS code.
 - One work package per PR; merged only after the owner's "Mehet".

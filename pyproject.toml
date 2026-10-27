@@ -19,6 +19,7 @@ dependencies = [
 [project.scripts]
 ai-perimeter-chat = "ai_perimeter.cli:main"
 fr-ai-assist = "ai_perimeter.service:main"
+fr-webui-ai = "ai_perimeter.webui.server:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "httpx>=0.27"]

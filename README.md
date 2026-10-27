@@ -8,8 +8,8 @@
 > **What existed before and what was built this week.** [FR_OS](https://github.com/starsmash29/FR_OS-pblk)
 > (the firewall/router OS: nftables, eBPF/XDP, the webUI, the anomaly signals) existed before the
 > Meta AI Developer Hackathon 2026 and is used here as a pinned dependency. **Everything in this
-> repository was written during the hackathon (from 2026-10-26).** Small changes that FR_OS needs
-> are kept as marked patches in [`integration/fr_os/`](integration/fr_os/).
+> repository was written during the hackathon (from 2026-10-26).** No FR_OS file is changed: the
+> AI-Perimeter runs beside FR_OS (see [`integration/fr_os/`](integration/fr_os/)).
 
 # FR_OS AI-Perimeter
 
@@ -31,7 +31,7 @@ never executes anything:
 
 | | Feature | Status |
 |---|---|---|
-| 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals (A2) and the webUI screen (A3) done; installer next |
+| 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals (A2), the webUI screen (A3) and the installer done; evaluation next |
 | 2 | **Edge Anomaly Explainer:** an evidence bundle from the XDP/SNI, TLS JA4 and DNS threat signals → an incident report with NIS2 / NIST SP 800-53 control references; Shadow AI upload detection | planned |
 
 ## Models
@@ -83,10 +83,39 @@ and rolls it back unless the admin confirms.
 
 ```
 src/ai_perimeter/     the new code
-integration/fr_os/    marked patches for FR_OS (navigation, router registration, service unit)
+integration/fr_os/    how it joins FR_OS without changing an FR_OS file
+installer/            install.sh and the bundle it installs from
+systemd/              fr-ai-assist's units and the drop-in for FR_OS's webUI
 tests/                tests (real local HTTP servers, not mocks)
 docs/brand/           logo files
 ```
+
+## Install on an FR_OS router
+
+```bash
+installer/make-bundle.sh            # on a build machine: dist/fr-os-ai-perimeter-<version>.tar.gz
+# copy the .tar.gz (and its .sha256) to the router, then:
+sha256sum -c fr-os-ai-perimeter-*.tar.gz.sha256
+tar -xzf fr-os-ai-perimeter-*.tar.gz && cd fr-os-ai-perimeter-*/
+sudo ./install.sh                   # --uninstall removes it, --purge also its settings and key
+```
+
+`install.sh` downloads nothing and installs no dependency. It checks that the bundle is whole and
+that the machine is FR_OS, installs the package and the units, creates
+`/etc/fr_os/ai-perimeter.yaml` (`enabled: false`) and an empty key file
+`/etc/fr_os/ai-perimeter/api_key` (root, 0600) if they don't exist, and never overwrites them.
+It then checks that only the webUI's account can reach `fr-ai-assist` and that the webUI came back.
+The AI-Perimeter entry appears in the sidebar; it stays off until `enabled: true`.
+
+**FR_OS itself is not changed.** The webUI gets the screen from `fr-webui-ai`, which runs FR_OS's
+own `fr-webui` code and adds the screen in memory; a systemd drop-in starts it in place of
+`fr-webui`, under FR_OS's own account and sandbox. FR_OS's integrity check (which compares its
+installed files with the signed release) therefore stays clean. On a live USB system, FR_OS's
+persistence check does list the added files (the package, the units, the drop-in), as it should:
+they are not part of FR_OS. The `install` CI job runs all of this on a real systemd.
+
+The SHA256 sums show that the bundle arrived whole. They are not a signature: compare the
+`.sha256` with the one on the release page.
 
 ## Development
 
