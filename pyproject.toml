@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 ai-perimeter-chat = "ai_perimeter.cli:main"
+fr-ai-assist = "ai_perimeter.service:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

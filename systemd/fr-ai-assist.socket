@@ -1,0 +1,16 @@
+[Unit]
+Description=FR_OS AI-Perimeter model service socket
+
+[Socket]
+ListenStream=/run/fr_os-ai/assist.sock
+DirectoryMode=0755
+# Only the webUI's account (and root) can connect; fr-ai-assist then checks
+# each peer's uid itself (ai_perimeter.service.allowed_uids). The parser
+# daemons' account, fr_os-sensor, is not in fr_os-webui (FR_OS SEC-11).
+SocketMode=0660
+SocketUser=root
+SocketGroup=fr_os-webui
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

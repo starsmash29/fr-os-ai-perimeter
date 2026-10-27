@@ -1,0 +1,59 @@
+[Unit]
+Description=FR_OS AI-Perimeter model service (proposes, never applies)
+Documentation=https://github.com/starsmash29/fr-os-ai-perimeter
+Requires=fr-ai-assist.socket
+After=fr-ai-assist.socket network-online.target
+# Off unless configured (security-lessons I1, K7): without its settings file
+# the service does not start; with enabled: false it answers ping/status only.
+ConditionPathExists=/etc/fr_os/ai-perimeter.yaml
+
+[Service]
+Type=simple
+# Its own unprivileged account, made per start (security-lessons A1): no
+# group of the webUI's or the sensors', so it can read neither config.yaml
+# nor the apply-helper socket. Model output is untrusted input; this
+# service only returns proposals.
+DynamicUser=yes
+# The API key stays root's (mode 0600); systemd hands this service a private
+# copy in $CREDENTIALS_DIRECTORY. The installer creates it empty (systemd
+# refuses to start the service if the source file is missing); an empty key
+# means none, which a local model doesn't need.
+LoadCredential=api_key:/etc/fr_os/ai-perimeter/api_key
+ExecStart=fr-ai-assist --config /etc/fr_os/ai-perimeter.yaml
+Restart=on-failure
+RestartSec=5
+# Sandbox (security-lessons I1; checked by tests/test_systemd_units.py).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+UMask=0077
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+# AF_UNIX for its socket, AF_INET/AF_INET6 to reach the model (a local
+# Ollama, or an opt-in cloud provider). No netlink, no raw sockets.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=512M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target
