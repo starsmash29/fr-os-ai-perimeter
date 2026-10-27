@@ -44,9 +44,11 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
+from frfw.adblock.dga import looks_generated
 from frfw.ai_ids.engine import (
     ABS_CONN_RATE_FLOOR,
     ABS_UNIQUE_DST_RATIO_FLOOR,
+    AnomalyEngine,
     AnomalyEvent,
 )
 from frfw.appid.usage import UsageTracker
@@ -371,45 +373,58 @@ def build_tls_fingerprints_office(now: float) -> dict:
     return snapshot
 
 
+def _office_destinations(count: int) -> list[str]:
+    """Distinct invented destination addresses (the RFC 5737
+    documentation ranges) to feed the anomaly engine. They only reach
+    the engine's counters, never a written file."""
+    hosts = [f"198.51.100.{n}" for n in range(1, 255)]
+    hosts += [f"203.0.113.{n}" for n in range(1, 255)]
+    return hosts[:count]
+
+
+def _engine_event(engine: AnomalyEngine, ip: str, mac: str, at: float) -> dict:
+    event = engine.evaluate(ip, now=at)
+    if event is None:
+        raise RuntimeError(f"the anomaly engine did not flag {ip}")
+    return {"ts": at, **asdict(event), "mac": mac}
+
+
 def build_ai_ids_events_office(now: float) -> list:
-    """fr-ai-ids's recent-events log for the office: the laptop looked
-    up the threat-feed domain (modest rate -- the lookups, not the
-    volume, are the signal), then the design file server started
-    scanning the floors and walking DGA-style names. HSML and the
-    Azarus Group are fictional; all indicators are invented."""
-    laptop_conn_rate = 2.2  # modest, under ABS_CONN_RATE_FLOOR
-    laptop_ratio = 0.35  # modest, under ABS_UNIQUE_DST_RATIO_FLOOR
-    laptop_score = round(max(laptop_conn_rate / ABS_CONN_RATE_FLOOR,
-                             laptop_ratio / ABS_UNIQUE_DST_RATIO_FLOOR), 2)
-    laptop = AnomalyEvent(
-        ip=DESIGN_LAPTOP_IP,
-        score=laptop_score,
-        reasons=("threat-feed domain lookup",),
-        conn_rate=laptop_conn_rate,
-        unique_dst_ratio=laptop_ratio,
-        sni_block_count=0,
-        dns_threat_count=2,
-    )
-    nas_conn_rate = 9.0  # over ABS_CONN_RATE_FLOOR
-    nas_ratio = 0.87  # over ABS_UNIQUE_DST_RATIO_FLOOR
-    nas_score = round(max(nas_conn_rate / ABS_CONN_RATE_FLOOR,
-                          nas_ratio / ABS_UNIQUE_DST_RATIO_FLOOR), 2)
-    nas = AnomalyEvent(
-        ip=NAS_IP,
-        score=nas_score,
-        reasons=("connection-rate spike", "destination-scan pattern",
-                 "DGA-style lookups"),
-        conn_rate=nas_conn_rate,
-        unique_dst_ratio=nas_ratio,
-        sni_block_count=0,
-        nxdomain_count=40,
-        dga_nxdomain_count=30,
-        dns_threat_count=0,
-    )
-    return [
-        {"ts": now - 900, **asdict(laptop), "mac": DESIGN_LAPTOP_MAC},
-        {"ts": now - 300, **asdict(nas), "mac": NAS_MAC},
-    ]
+    """fr-ai-ids's recent-events log for the office: the laptop's
+    lookups of the threat-feed domain were blocked (modest traffic --
+    the lookups, not the volume, are the signal), then the design file
+    server started scanning and walking DGA-style names.
+
+    Unlike the home scenario, the events are not written by hand: one
+    60-second window per device is fed to FR_OS's own AnomalyEngine and
+    its verdict is written as is, so the reasons, counts and scores are
+    exactly what fr-ai-ids would log for that traffic (a new device is
+    scored against the ABS_*_FLOOR values). HSML and the Azarus Group
+    are fictional; all indicators are invented."""
+    engine = AnomalyEngine()
+    window = engine.window_seconds
+
+    laptop_at = now - 900
+    laptop_from = laptop_at - window
+    laptop_dsts = _office_destinations(46)
+    for n in range(132):  # 2.2 connections/second, few new hosts
+        engine.observe_connection(DESIGN_LAPTOP_IP, laptop_dsts[n % len(laptop_dsts)],
+                                  now=laptop_from + n * window / 132)
+    for n in range(4):  # over ABS_DNS_THREAT_FLOOR (3)
+        engine.observe_dns_threat_block(DESIGN_LAPTOP_IP, now=laptop_from + 10 + n * 12)
+    laptop = _engine_event(engine, DESIGN_LAPTOP_IP, DESIGN_LAPTOP_MAC, laptop_at)
+
+    nas_at = now - 300
+    nas_from = nas_at - window
+    nas_dsts = _office_destinations(470)
+    for n in range(540):  # 9 connections/second to 470 hosts
+        engine.observe_connection(NAS_IP, nas_dsts[n % len(nas_dsts)],
+                                  now=nas_from + n * window / 540)
+    for n, name in enumerate(_office_dga_names()):
+        engine.observe_dns_nxdomain(NAS_IP, name, generated=looks_generated(name),
+                                    now=nas_from + 1 + n * 1.5)
+    nas = _engine_event(engine, NAS_IP, NAS_MAC, nas_at)
+    return [laptop, nas]
 
 
 def build_iot_inventory_office(now: float) -> dict:
@@ -456,16 +471,20 @@ def build_iot_inventory_office(now: float) -> dict:
 def _office_dga_names(count: int = OFFICE_DGA_COUNT) -> list[str]:
     """Distinct random-looking .example names for the file server's
     DGA-style lookups. Seeded, so the same count always gives the same
-    names. HSML and the Azarus Group are fictional; all indicators are
-    invented."""
+    names. A candidate is kept only if FR_OS's own detector
+    (frfw.adblock.dga.looks_generated) calls it generated -- random
+    strings are full of common letter pairs more often than one would
+    guess -- so every NXDOMAIN in the log is one fr-ai-ids counts as
+    DGA-like. HSML and the Azarus Group are fictional; all indicators
+    are invented."""
     rng = random.Random(20261026)
     alphabet = string.ascii_lowercase + string.digits
     names: list[str] = []
     seen: set[str] = set()
     while len(names) < count:
-        label = "".join(rng.choice(alphabet) for _ in range(10))
+        label = "".join(rng.choice(alphabet) for _ in range(12))
         name = f"{label}.example"
-        if name in seen:
+        if name in seen or not looks_generated(name):
             continue
         seen.add(name)
         names.append(name)

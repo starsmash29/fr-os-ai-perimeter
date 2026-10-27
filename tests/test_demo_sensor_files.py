@@ -23,7 +23,9 @@ from pathlib import Path
 
 import pytest
 
+from frfw.adblock.dga import looks_generated
 from frfw.adblock.dns_service import dnsmasq_message
+from frfw.ai_ids.engine import ABS_DNS_THREAT_FLOOR
 from frfw.ai_ids.daemon import _DNS_LINE_RE as AI_IDS_DNS_LINE_RE
 from frfw.ai_ids.daemon import _DNS_NXDOMAIN_RE as AI_IDS_DNS_NXDOMAIN_RE
 from frfw.ai_ids.daemon import load_recent_events
@@ -261,6 +263,22 @@ def test_office_ai_ids_flags_laptop_and_nas(office_sensors: Path) -> None:
         assert event["mac"].lower().startswith("02:00:00:00:10:")
         assert OFFICE_WINDOW_START <= event["ts"] <= OFFICE_NOW
 
+
+
+def test_office_ai_ids_events_are_the_engines_own(office_sensors: Path) -> None:
+    """The office events come out of FR_OS's AnomalyEngine, not a hand-made
+    dict: the reasons are the engine's own labels, the laptop is over the
+    DNS-threat floor, and the file server's NXDOMAIN counts match the log."""
+    events = {e["ip"]: e for e in load_recent_events(office_sensors / "ai_ids_state.json")}
+    laptop, nas = events[DESIGN_LAPTOP_IP], events[NAS_IP]
+    assert laptop["reasons"] == ["malware/phishing DNS lookups"]
+    assert laptop["dns_threat_count"] >= ABS_DNS_THREAT_FLOOR
+    assert nas["reasons"] == ["connection-rate spike", "NXDOMAIN burst",
+                              "DGA-like NXDOMAIN lookups", "destination-scan pattern"]
+    _queries, nxdomains = parsed_office_queries(office_sensors)
+    names = {n for c, n in nxdomains if c == NAS_IP}
+    assert nas["nxdomain_count"] == nas["dga_nxdomain_count"] == len(names)
+    assert all(looks_generated(n) for n in names)
 
 def test_office_nas_nxdomains_and_example_names_only(office_sensors: Path) -> None:
     queries, nxdomains = parsed_office_queries(office_sensors)
