@@ -1,7 +1,7 @@
 # Third-party components and model terms
 
-Inventory checked on 2026-10-27 against AI-Perimeter `main` at
-[`2e75a56`](https://github.com/starsmash29/fr-os-ai-perimeter/tree/2e75a56a9130bb07bc13f786f45d382403751753).
+Inventory checked on 2026-10-27 against AI-Perimeter `main` after the
+installer (PR #8).
 Dependency declarations come from [`pyproject.toml`](pyproject.toml).
 Licence links identify the upstream source of each licence; they do not
 replace the notices supplied with an installed distribution.
@@ -21,8 +21,8 @@ declares **AGPL-3.0-only**; the
 [pinned licence text](https://github.com/starsmash29/fr_os-hackathon/blob/815576493ca8c6512244bae9b482d6923c575650/LICENSE)
 is GNU Affero General Public License version 3.
 AI-Perimeter's own licence is in [LICENSE](LICENSE).
-FR_OS integration changes are kept as
-[marked patches](integration/fr_os/README.md).
+No FR_OS file is modified; how AI-Perimeter joins FR_OS is described in
+[integration/fr_os/README.md](integration/fr_os/README.md).
 
 ## Python requirements declared by AI-Perimeter
 
@@ -38,7 +38,15 @@ runtime and optional-dependency declarations, including the webUI extra.
 | webUI extra | `frfw[webui] @ git+https://github.com/starsmash29/fr_os-hackathon@815576493ca8c6512244bae9b482d6923c575650` | FR_OS and its existing webUI dependencies | [AGPL-3.0-only](https://github.com/starsmash29/fr_os-hackathon/blob/815576493ca8c6512244bae9b482d6923c575650/LICENSE) |
 
 The model HTTP client uses Python's standard library. This project does not
-declare a separate model-provider SDK.
+declare a separate model-provider SDK. The install bundle
+(`installer/make-bundle.sh`) contains only this project's own wheel; it
+installs with `--no-deps` and uses the FR_OS packages already on the router.
+
+## Runtime used beside it, not shipped
+
+| Component | Role | Licence |
+|---|---|---|
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) | Serves a local GGUF model (Muse Glimmer) over an OpenAI-compatible API; installed and run by the operator | [MIT](https://github.com/ggml-org/llama.cpp/blob/master/LICENSE) |
 
 ## Python requirements inherited from pinned FR_OS
 
@@ -76,8 +84,12 @@ choice is not evidence that a successful live demo or benchmark has run.
 | Muse Spark Open through Baseten | `meta-models/muse-spark-open-1026` | [Muse Model License](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/blob/main/LICENSE.md); [Meta's model documentation](https://dev.meta.ai/docs/muse-spark-open#license) also links its acceptable-use policy |
 | Muse Spark through Meta Model API | `muse-spark-1.3` | [Meta Model API Terms of Service](https://dev.meta.ai/legal/terms-of-service); API access is governed by these terms, not the separate open-weight model licence |
 
-TODO(claude): verify the exact downloaded Glimmer checkpoint, quantization,
-runtime and accompanying notices used for the demo.
+The Glimmer weights are not part of this repository; the operator downloads
+them (for example the GGUF build in
+[`meta-models/Muse-Glimmer-30B-GGUF`](https://huggingface.co/meta-models/Muse-Glimmer-30B-GGUF))
+together with their licence notice.
+TODO(claude): record the exact checkpoint and quantization used for the demo
+once the demo model is chosen.
 
 TODO(claude): verify that Baseten's `meta-models/muse-spark-open-1026`
 deployment maps to the documented Muse Spark Open release, and record the
