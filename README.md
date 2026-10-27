@@ -32,7 +32,7 @@ never executes anything:
 | | Feature | Status |
 |---|---|---|
 | 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals (A2), the webUI screen (A3), the installer and the evaluation harness (A5) done; measured results next |
-| 2 | **Edge Anomaly Explainer:** an evidence bundle from the XDP/SNI, TLS JA4 and DNS threat signals → an incident report with NIS2 / NIST SP 800-53 control references; Shadow AI upload detection | planned |
+| 2 | **Edge Anomaly Explainer:** a pseudonymised evidence bundle from FR_OS's AI IDS, App-ID, TLS JA4 and DNS signals → a short incident explanation with NIS2 / NIST SP 800-53 control references; Shadow AI use (AI services per device) | explainer, Shadow AI use and the screen part (A4) done; demo data and per-device upload bytes next |
 
 ## Models
 
@@ -214,6 +214,33 @@ is not the credential source for the sandboxed systemd service.
 TODO(claude): verify the complete installed webUI → save → Apply → confirm/rollback
 flow on the demo router. The source and tests describe these steps; this guide
 does not report an end-to-end deployment test.
+
+### What did the router see? (A4)
+
+Above the request box, the screen lists the devices FR_OS's sensors flagged in the last
+24 hours: an AI IDS anomaly event, use of an AI service (Shadow AI: FR_OS App-ID's `ai`
+category plus Gemini, Claude, Copilot, Perplexity, DeepSeek, Mistral and Meta AI seen in the
+resolver's query log), or a TLS fingerprint on the blocklist. An admin clicks **Explain**:
+
+1. The webUI builds the device's **evidence bundle** from FR_OS's own sensor files
+   (`incident/evidence.py`). The device is `device-1`: its address, MAC and name never
+   reach the model, and every sensor string is cut short and scrubbed of addresses. Every
+   item has an id (`ids-1`, `ai-1`, `tls-1`, `dns-1`). No packet contents exist to send.
+2. `fr-ai-assist` runs a short **read-only agent loop** (`incident/explain.py`): the model
+   sees an overview, asks for up to four evidence sections, then answers in a closed JSON
+   format. Its "tools" are lookups in the bundle; nothing else is reachable.
+3. The answer is checked in code: it must cite evidence that exists, the severity is
+   raised to what the evidence alone shows (a blocklisted fingerprint or a known threat is
+   `high`, an anomaly event at least `medium`), and text is length-limited.
+4. The card shows the explanation, the cited evidence and fixed **Related controls**
+   (NIS2 Art. 21(2)(b) and Art. 23, NIST SP 800-53 SI-4 and IR-4), plus, for a `high`
+   incident, a reminder of NIS2's 24-hour early warning. These are references, not a
+   compliance report.
+5. A suggested change goes into **What should change?** as words, with the device's real
+   name. Nothing happens until the admin proposes it, reviews the result and saves it.
+
+Not yet: bytes uploaded per device (it needs FR_OS's conntrack accounting, an FR_OS
+change), so Shadow AI is measured as use and its timing, not volume.
 
 ### How a proposal is judged
 
