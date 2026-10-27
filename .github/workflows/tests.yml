@@ -18,3 +18,17 @@ jobs:
           python-version: "3.11"
       - run: pip install -e '.[dev,webui]'
       - run: python3 -m pytest -q
+
+  # install.sh on the runner's real systemd, against FR_OS's own fr-webui
+  # unit and code at the pinned commit (tests/integration/systemd-install.sh).
+  install:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the bundle
+        run: installer/make-bundle.sh dist
+      - name: Install, check, uninstall
+        run: |
+          commit=$(sed -n 's|.*fr_os-hackathon@\([0-9a-f]\{40\}\)".*|\1|p' pyproject.toml | sort -u)
+          test "$(echo "$commit" | wc -l)" -eq 1
+          sudo PYTHON=/usr/bin/python3 tests/integration/systemd-install.sh dist/fr-os-ai-perimeter-*.tar.gz "$commit"

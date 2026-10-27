@@ -36,7 +36,6 @@ from test_client import FakeProvider, _completion  # noqa: E402
 from test_orchestrator import BLOCK_TIKTOK, HOME, KIDS_NIGHT, add_rule  # noqa: E402
 
 REAL_HASH = "scrypt$32768$8$3$c2FsdHNhbHRzYWx0$aGFzaGhhc2hoYXNoaGFzaA"
-PATCH = Path(__file__).parent.parent / "integration" / "fr_os" / "0001-ai-perimeter-screen.patch"
 
 
 class FakeHelper:
@@ -292,46 +291,62 @@ def test_posts_need_the_csrf_token(env, url):
     assert env["provider"].requests == []
 
 
-# --- the FR_OS patch ----------------------------------------------------------------
+# --- fr-webui-ai: FR_OS's webUI with the screen, no FR_OS file changed ---------
 
-def test_the_fr_os_patch_applies_and_registers_the_screen(tmp_path):
-    """The marked patch applies to the pinned FR_OS, and the patched webUI
-    shows the page and the menu entry (checked in a fresh interpreter)."""
-    import frfw
+def test_fr_webui_ai_runs_fr_os_main_with_the_screen(tmp_path, monkeypatch):
+    """fr-webui-ai runs FR_OS's own server.main against the pinned FR_OS, and
+    the app main serves has the page and the sidebar entry. Red if FR_OS
+    stops building the app through server.create_app."""
+    from frfw.webui import server as fr_server
+    from frfw.webui.templating import NAV
 
-    if shutil.which("git") is None:
-        pytest.fail("git is needed to check the FR_OS patch")
-    text = PATCH.read_text()
-    assert "# AI-Perimeter" in text
-    src = tmp_path / "src"
-    shutil.copytree(Path(frfw.__file__).parent, src / "frfw",
-                    ignore=shutil.ignore_patterns("__pycache__"))
-    subprocess.run(["git", "apply", "--check", str(PATCH)], cwd=tmp_path, check=True)
-    subprocess.run(["git", "apply", str(PATCH)], cwd=tmp_path, check=True)
-    probe = (
-        "import sys; sys.path.insert(0, sys.argv[1])\n"
-        "import frfw.webui.app as a, frfw.webui.templating as t\n"
-        "assert a.__file__.startswith(sys.argv[1]), a.__file__\n"
-        # Every state path in tmp: FR_OS's defaults are under /etc and /var.
-        "from pathlib import Path\n"
-        "from frfw.webui.auth import AdminStore, SessionManager\n"
-        "from frfw.webui.auth_rate_limiter import BruteforceGuard\n"
-        "tmp = Path(sys.argv[2])\n"
-        "names = ('ai_ids_state_path', 'update_state_path', 'xdp_state_path', 'adblock_hosts_path',\n"
-        "         'adblock_category_dir', 'iot_inventory_path', 'appid_usage_path', 'audit_log_path',\n"
-        "         'alerts_seen_path', 'update_check_path', 'tlsfp_state_path', 'webui_cert_path')\n"
-        "app = a.create_app(config_path=tmp / 'config.yaml', admin_store=AdminStore(tmp / 'auth.json'),\n"
-        "                   session_manager=SessionManager(tmp / 'secret.key'), bruteforce_guard=BruteforceGuard(),\n"
-        "                   helper=object(), **{n: tmp / n for n in names})\n"
-        "paths = {getattr(r, 'path', '') for r in app.routes}\n"
-        "for rt in app.routes:\n"
-        "    paths |= {getattr(x, 'path', '') for x in getattr(getattr(rt, 'original_router', None), 'routes', [])}\n"
-        "assert '/ai-perimeter' in paths, sorted(paths)\n"
-        "assert ('AI-Perimeter', '/ai-perimeter', 'psychology', False) in t.NAV[0][1]\n"
-        "print('ok')\n"
-    )
+    from ai_perimeter.webui import NAV_ENTRY
+    from ai_perimeter.webui import server as wrapper
+
     state = tmp_path / "state"
     state.mkdir()
-    result = subprocess.run([sys.executable, "-c", probe, str(src), str(state)], capture_output=True,
-                            text=True, cwd=tmp_path)
-    assert result.stdout.strip() == "ok", result.stderr
+    real_create_app = fr_server.create_app
+
+    def create_app_in_tmp(**kwargs):
+        # Every state path in tmp: FR_OS's defaults are under /etc and /var.
+        names = ("ai_ids_state_path", "update_state_path", "xdp_state_path", "adblock_hosts_path",
+                 "adblock_category_dir", "iot_inventory_path", "appid_usage_path", "audit_log_path",
+                 "alerts_seen_path", "update_check_path", "tlsfp_state_path")
+        return real_create_app(admin_store=AdminStore(state / "auth.json"),
+                               session_manager=SessionManager(state / "secret.key"),
+                               bruteforce_guard=BruteforceGuard(), helper=object(),
+                               **{n: state / n for n in names}, **kwargs)
+
+    served = []
+
+    class NoServer:
+        def __init__(self, config):
+            served.append(config.app)
+
+        def run(self, sockets):
+            assert sockets == []
+
+    monkeypatch.setattr(fr_server, "create_app", create_app_in_tmp)
+    monkeypatch.setattr(fr_server.uvicorn, "Server", NoServer)
+    monkeypatch.setattr(fr_server, "bind_sockets", lambda addresses, port: [])
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(HOME, sort_keys=False))
+    argv = ["--host", "127.0.0.1", "--port", "8443", "--config", str(tmp_path / "config.yaml"),
+            "--cert", str(tmp_path / "cert.pem"), "--key", str(tmp_path / "key.pem"),
+            "--listen-record", str(tmp_path / "listen.json")]
+
+    assert wrapper.main(argv) == 0
+    assert wrapper.main(argv) == 0  # wrapping twice must not register twice
+
+    assert len(served) == 2
+    client = TestClient(served[0], follow_redirects=False)
+    assert client.get("/login").status_code == 200  # FR_OS's own app, not a stand-in
+    page = client.get("/ai-perimeter")
+    assert page.status_code == 303 and page.headers["location"].startswith("/login")
+    assert client.get("/no-such-page").status_code == 404
+    core = dict(NAV)["Core"]
+    assert core.count(NAV_ENTRY) == 1
+
+
+def test_no_fr_os_file_is_patched():
+    """The integration changes no FR_OS file (FR_OS integrity, SEC-15)."""
+    assert not list((Path(__file__).parent.parent / "integration").rglob("*.patch"))
