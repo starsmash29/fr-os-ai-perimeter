@@ -312,7 +312,17 @@ def test_the_fr_os_patch_applies_and_registers_the_screen(tmp_path):
         "import sys; sys.path.insert(0, sys.argv[1])\n"
         "import frfw.webui.app as a, frfw.webui.templating as t\n"
         "assert a.__file__.startswith(sys.argv[1]), a.__file__\n"
-        "app = a.create_app(helper=object.__new__(type('H', (), {'audit_append': lambda s, e: None})))\n"
+        # Every state path in tmp: FR_OS's defaults are under /etc and /var.
+        "from pathlib import Path\n"
+        "from frfw.webui.auth import AdminStore, SessionManager\n"
+        "from frfw.webui.auth_rate_limiter import BruteforceGuard\n"
+        "tmp = Path(sys.argv[2])\n"
+        "names = ('ai_ids_state_path', 'update_state_path', 'xdp_state_path', 'adblock_hosts_path',\n"
+        "         'adblock_category_dir', 'iot_inventory_path', 'appid_usage_path', 'audit_log_path',\n"
+        "         'alerts_seen_path', 'update_check_path', 'tlsfp_state_path', 'webui_cert_path')\n"
+        "app = a.create_app(config_path=tmp / 'config.yaml', admin_store=AdminStore(tmp / 'auth.json'),\n"
+        "                   session_manager=SessionManager(tmp / 'secret.key'), bruteforce_guard=BruteforceGuard(),\n"
+        "                   helper=object(), **{n: tmp / n for n in names})\n"
         "paths = {getattr(r, 'path', '') for r in app.routes}\n"
         "for rt in app.routes:\n"
         "    paths |= {getattr(x, 'path', '') for x in getattr(getattr(rt, 'original_router', None), 'routes', [])}\n"
@@ -320,6 +330,8 @@ def test_the_fr_os_patch_applies_and_registers_the_screen(tmp_path):
         "assert ('AI-Perimeter', '/ai-perimeter', 'psychology', False) in t.NAV[0][1]\n"
         "print('ok')\n"
     )
-    result = subprocess.run([sys.executable, "-c", probe, str(src)], capture_output=True, text=True,
-                            cwd=tmp_path)
+    state = tmp_path / "state"
+    state.mkdir()
+    result = subprocess.run([sys.executable, "-c", probe, str(src), str(state)], capture_output=True,
+                            text=True, cwd=tmp_path)
     assert result.stdout.strip() == "ok", result.stderr
