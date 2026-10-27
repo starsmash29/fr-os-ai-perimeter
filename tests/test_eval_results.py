@@ -57,6 +57,7 @@ def test_the_readme_summary_matches_the_results():
         "muse-spark-1.3": {"correct": 118, "wrong_refusal": 2},
         "meta-models/muse-spark-open-1026": {"correct": 117, "incorrect": 1, "wrong_refusal": 2},
         "Muse-Glimmer-30B-KQuant-17GB-Q4_K_M": {"correct": 10, "error": 2},
+        "muse-wonder-1.0": {"correct": 120},
     }
     rows = data()["results"]
     for model, verdicts in expected.items():
@@ -72,3 +73,53 @@ def test_the_committed_report_is_a_fresh_build(tmp_path):
     assert result.returncode == 0, result.stderr
     assert out.read_text(encoding="utf-8") == REPORT.read_text(encoding="utf-8")
     assert "Sample data" not in out.read_text(encoding="utf-8")
+
+
+# --- docs/eval/incident-results.json: the A4 explanation cases ------------------------
+
+INCIDENTS = EVAL / "incident-results.json"
+INCIDENT_ROW_KEYS = {"case", "model", "status", "verdict", "seconds", "steps", "severity",
+                     "severity_raised", "cited", "suggested_change", "missed", "refused_by",
+                     "run", "error"}
+
+
+def incident_data() -> dict:
+    return json.loads(INCIDENTS.read_text(encoding="utf-8"))
+
+
+def test_the_incident_results_describe_todays_cases():
+    from ai_perimeter.eval.incidents import CASES as INCIDENT_CASES
+    cases = {c.id: c for c in INCIDENT_CASES}
+    d = incident_data()
+    assert d["suite"] == "incidents"
+    for case in d["cases"]:
+        assert case["category"] == cases[case["id"]].category
+        assert case["scenario"] == cases[case["id"]].scenario
+
+
+def test_the_incident_results_hold_no_explanation_text():
+    d = incident_data()
+    assert set(d) == {"generated", "suite", "models", "cases", "results"}
+    for row in d["results"]:
+        assert set(row) <= INCIDENT_ROW_KEYS, set(row) - INCIDENT_ROW_KEYS
+        for key in ("missed", "refused_by", "error"):
+            if key in row:
+                assert row[key].isidentifier(), (key, row[key])
+    text = INCIDENTS.read_text(encoding="utf-8")
+    for marker in ("api_key", "Bearer", ".config/fr_os", "/home/", "sk-", "device-1"):
+        assert marker not in text
+
+
+def test_the_incident_summary_matches_the_readme():
+    expected = {
+        "muse-spark-1.3": {"correct": 12, "incorrect": 3},
+        "meta-models/muse-spark-open-1026": {"correct": 14, "incorrect": 1},
+        "muse-wonder-1.0": {"correct": 14, "incorrect": 1},
+    }
+    rows = incident_data()["results"]
+    for model, verdicts in expected.items():
+        mine = [r for r in rows if r["model"] == model]
+        assert dict(collections.Counter(r["verdict"] for r in mine)) == verdicts
+        assert all(r.get("missed") == "no_suggested_change" and r["case"] == "x01"
+                   for r in mine if r["verdict"] == "incorrect")
+        assert not any(r.get("severity_raised") for r in mine)
