@@ -57,39 +57,6 @@ ai-perimeter-chat --provider baseten --allow-cloud "Hello"
 ai-perimeter-chat --provider meta --allow-cloud "Hello"
 ```
 
-### How a proposal is judged
-
-The model answers with a patch in a closed JSON format: `add_rule`, `modify_rule`,
-`remove_rule`, `block_app` / `unblock_app`, `set_ztna` (the switch and the session
-length, never users) and `add_wireguard_peer` / `remove_wireguard_peer` (a name only;
-FR_OS's VPN screen makes the keys). Any other operation or field refuses the whole patch.
-Then, in code:
-
-1. **Deny list** (`orchestrator/deny.py`): no accept rule from the internet to the router
-   itself, none from the internet without a port or source address, and no change outside
-   rules, app control, the ZTNA switch and WireGuard peers.
-2. **FR_OS's validator** (`frfw.config.parse_config`) on the whole patched config.
-3. **FR_OS's rule linter** (`frfw.rule_lint`): new shadowed, redundant or too-open rules.
-4. A **YAML diff** for the admin, with weakening changes called out.
-
-On the **AI-Perimeter** screen in FR_OS's webUI (admins only) the admin sees the proposal,
-the diff, the rule check and, under "Why?", the model's own reasoning. "Approve and save"
-saves exactly what was shown: once, by the admin who asked, only if `config.yaml` has not
-changed since, re-checked, replayed on the real config (not the redacted copy the model saw)
-and written through FR_OS's apply-helper, with an audit entry. FR_OS's Apply then loads it
-and rolls it back unless the admin confirms.
-
-## Layout
-
-```
-src/ai_perimeter/     the new code
-integration/fr_os/    how it joins FR_OS without changing an FR_OS file
-installer/            install.sh and the bundle it installs from
-systemd/              fr-ai-assist's units and the drop-in for FR_OS's webUI
-tests/                tests (real local HTTP servers, not mocks)
-docs/brand/           logo files
-```
-
 ## Install on an FR_OS router
 
 ```bash
@@ -116,6 +83,170 @@ they are not part of FR_OS. The `install` CI job runs all of this on a real syst
 
 The SHA256 sums show that the bundle arrived whole. They are not a signature: compare the
 `.sha256` with the one on the release page.
+
+## Configure
+
+The service reads `/etc/fr_os/ai-perimeter.yaml`, separately from the router's
+`config.yaml`. It is off when that file is missing or `enabled` is false. The
+accepted keys are defined in [settings.py](src/ai_perimeter/settings.py); provider
+defaults and URL checks are in [client.py](src/ai_perimeter/client.py).
+
+Choose **one** of the following settings files. These examples describe the
+existing settings format, not an installation procedure.
+
+### Local llama.cpp / Muse Glimmer
+
+Use a locally served Muse Glimmer model through an OpenAI-compatible endpoint.
+This example assumes your server listens on loopback port 8080; use its actual
+address and model ID.
+
+```yaml
+enabled: true
+provider: local
+base_url: http://127.0.0.1:8080/v1
+model: replace-with-your-glimmer-server-model-id
+allow_cloud: false
+timeout: 120
+```
+
+The model value above is a placeholder, not a downloadable model identifier.
+There is no default local model. If `base_url` is omitted, the client defaults to
+`http://127.0.0.1:11434/v1`. A local server without authentication needs no API key.
+
+TODO(claude): verify the Glimmer model artifact, quantization, server model ID and
+llama.cpp launch command for the demo hardware.
+
+### Baseten / Muse Spark Open
+
+```yaml
+enabled: true
+provider: baseten
+base_url: https://inference.baseten.co/v1
+model: meta-models/muse-spark-open-1026
+allow_cloud: true
+timeout: 120
+```
+
+### Meta Model API / Muse Spark
+
+```yaml
+enabled: true
+provider: meta
+base_url: https://api.meta.ai/v1
+model: muse-spark-1.3
+allow_cloud: true
+timeout: 120
+```
+
+These cloud URLs and model IDs are the presets currently in the repository.
+TODO(claude): verify account access and live availability of both cloud presets
+before recording a demo; parsing the settings does not prove provider access.
+
+Cloud use requires `allow_cloud: true` and HTTPS. The URL's host determines
+whether a call is local: `localhost` and literal loopback, private or link-local
+addresses count as local; other names require cloud opt-in, even with
+`provider: local`. The timeout is in seconds, from 1 to 600.
+
+A model request includes the intent and a selected, redacted configuration
+summary. Password hashes, API/metrics tokens and WireGuard key material are
+excluded from that summary; device names, MAC/IP addresses and rule details can
+still be included. Do not put secrets in the intent. Cloud opt-in authorizes
+sending that request to the configured provider.
+
+### API key files
+
+**Never put an API key in the YAML.** Store it in a regular file with mode
+`0600`, owned by the account that reads it. Do not use a symlink.
+
+The checked-in [service unit](systemd/fr-ai-assist.service) uses
+`LoadCredential=api_key:/etc/fr_os/ai-perimeter/api_key`. The source file is
+root-owned, mode `0600`; systemd supplies a private copy to the service. A
+nonempty `$CREDENTIALS_DIRECTORY/api_key` takes precedence over
+`api_key_file`. The unit expects its credential source to exist even for a
+keyless local model; an empty file means no credential. `install.sh` creates
+it empty (root, 0600) and never overwrites it.
+
+For a development run outside systemd, add **only a file path** to the chosen
+cloud settings file:
+
+```yaml
+# Baseten development override; the file contains the key.
+api_key_file: ~/.config/fr_os/baseten_api_key
+```
+
+For Meta, use `~/.config/fr_os/meta_api_key` instead. These are also the respective
+provider defaults outside systemd. Once the private key file exists, enforce its
+permissions on Linux with `chmod 600 /path/to/key-file`. The file must belong to
+the service or development account reading it; an operator's home-directory key
+is not the credential source for the sandboxed systemd service.
+
+## What you see
+
+1. Open **AI-Perimeter** in the FR_OS webUI. The model card shows the provider,
+   model and local/cloud status, or that the service is off or unavailable.
+   Signed-in viewers can inspect the page; proposing and saving require an admin.
+2. As an admin, enter an intent under **What should change?** and click
+   **Propose**. For a demo, use only [the example home configuration](tests/data/home.yaml):
+   "Keep the kids-tablet offline from 22:00 to 06:00 on weekdays."
+3. Read the result, changes, rule check and `config.yaml` diff before deciding:
+
+   | Result | Meaning |
+   |---|---|
+   | `ready` | The patch passed validation and policy checks with no new warning-level linter finding. Informational findings may still be shown. |
+   | `warnings` (shown as "check the warnings") | The patch passed validation and policy checks, but introduces warning-level findings for the admin to assess. It can still be saved. |
+   | `refused` | The proposal failed a format, configuration or policy check. Read "Why it was refused"; it cannot be saved. |
+   | `nothing` (shown as "nothing to change") | The model supplied no operations. There is nothing to save. |
+
+4. Review any **This weakens the firewall** caution. Expand **Why? (the model's
+   own reasoning)** if present. This is untrusted model text, not evidence that
+   a patch is safe; the deterministic checks and the diff are what to inspect.
+   A WireGuard peer request may instead include a handoff to FR_OS's VPN screen
+   to create keys.
+5. For a savable result, click **Approve and save** only after reviewing it.
+   Saving re-checks the operations, replays them on the real configuration and
+   writes through FR_OS's helper with an audit entry. A proposal belongs to the
+   admin who requested it, is single-use and expires after 15 minutes. If the
+   underlying configuration has changed, request a new proposal.
+6. Saving does not load the firewall rules. Use FR_OS's separate **Apply** action,
+   then confirm the change; its commit-confirm flow rolls back an unconfirmed
+   apply.
+
+TODO(claude): verify the complete installed webUI → save → Apply → confirm/rollback
+flow on the demo router. The source and tests describe these steps; this guide
+does not report an end-to-end deployment test.
+
+### How a proposal is judged
+
+The model answers with a patch in a closed JSON format: `add_rule`, `modify_rule`,
+`remove_rule`, `block_app` / `unblock_app`, `set_ztna` (the switch and the session
+length, never users) and `add_wireguard_peer` / `remove_wireguard_peer` (a name only;
+FR_OS's VPN screen makes the keys). Any other operation or field refuses the whole patch.
+Then, in code:
+
+1. **FR_OS's validator** (`frfw.config.parse_config`) on the whole patched config.
+2. **Deny list** (`orchestrator/deny.py`): no accept rule from the internet to the router
+   itself, none from the internet without a port or source address, and no change outside
+   rules, app control, the ZTNA switch and WireGuard peers.
+3. **FR_OS's rule linter** (`frfw.rule_lint`): new shadowed, redundant or too-open rules.
+4. A **YAML diff** for the admin, with weakening changes called out.
+
+On the **AI-Perimeter** screen in FR_OS's webUI the admin sees the proposal,
+the diff, the rule check and, under "Why?", the model's own reasoning. "Approve and save"
+saves exactly what was shown: once, by the admin who asked, only if `config.yaml` has not
+changed since, re-checked, replayed on the real config (not the redacted copy the model saw)
+and written through FR_OS's apply-helper, with an audit entry. FR_OS's Apply then loads it
+and rolls it back unless the admin confirms.
+
+## Layout
+
+```
+src/ai_perimeter/     the new code
+integration/fr_os/    how it joins FR_OS without changing an FR_OS file
+installer/            install.sh and the bundle it installs from
+systemd/              fr-ai-assist's units and the drop-in for FR_OS's webUI
+tests/                tests (real local HTTP servers, not mocks)
+docs/brand/           logo files
+```
 
 ## Development
 
