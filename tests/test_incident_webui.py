@@ -8,11 +8,16 @@ from __future__ import annotations
 
 import html
 import json
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
+from ai_perimeter.incident.evidence import Sources
+
 from test_client import _completion
-from test_incident import INJECTION, TABLET_IP, TABLET_MAC, answer, sources, tool  # noqa: F401
+from test_incident import NOW, INJECTION, TABLET_IP, TABLET_MAC, answer, sources, tool  # noqa: F401
 from test_orchestrator import KIDS_NIGHT
 from test_webui import env, login, post, proposal_id, provider  # noqa: F401 (fixtures)
 
@@ -20,6 +25,7 @@ from test_webui import env, login, post, proposal_id, provider  # noqa: F401 (fi
 @pytest.fixture
 def screen(env, sources):  # noqa: F811
     env["app"].state.ai_perimeter_sources = sources
+    env["app"].state.ai_perimeter_clock = lambda: NOW
     return env
 
 
@@ -90,3 +96,37 @@ def test_a_viewer_sees_the_list_but_cant_explain(screen):
     assert post(viewer, "/ai-perimeter/explain", {"ip": TABLET_IP}).status_code == 403
     assert post(login(screen), "/ai-perimeter/explain", {"ip": TABLET_IP}, csrf=False).status_code == 403
     assert screen["provider"].requests == []
+
+
+# --- the demo scenario (demo/shadow_ai, A4-3) -------------------------------------------------
+
+DEMO = Path(__file__).resolve().parent.parent / "demo" / "shadow_ai" / "make_sensor_files.py"
+DEMO_NOW = 1793230800.0  # the script's default: Wednesday 2026-10-28 23:40 UTC
+
+
+def test_the_demo_scenario_end_to_end(env, tmp_path):  # noqa: F811
+    """The video's path on the demo sensor files: the tablet is listed, the
+    model reads the evidence and explains it, the card carries the NIS2 and
+    NIST references, and the suggestion lands in the request box."""
+    out = tmp_path / "sensors"
+    subprocess.run([sys.executable, str(DEMO), "--out", str(out), "--now", str(DEMO_NOW)],
+                   check=True, capture_output=True)
+    env["app"].state.ai_perimeter_sources = Sources(
+        ids=out / "ai_ids_state.json", appid=out / "appid_usage.json",
+        tls=out / "tls_fingerprints.json", devices=out / "iot_inventory.json",
+        dns=out / "queries.log")
+    env["app"].state.ai_perimeter_clock = lambda: DEMO_NOW
+    client = login(env)
+    page = client.get("/ai-perimeter")
+    assert "kids-tablet" in page.text and "ChatGPT / OpenAI" in page.text
+    assert "living-room-tv" not in page.text  # streaming and one odd lookup: not flagged
+
+    env["provider"].queue = [tool("ai_usage"), tool("tls_fingerprints"), tool("ids_events"),
+                             answer(evidence=["ai-1", "tls-1", "ids-1"])]
+    page = post(client, "/ai-perimeter/explain", {"ip": TABLET_IP})
+    text = html.unescape(page.text)
+    assert "NIS2 Art. 23: reporting obligations" in text
+    assert "<code>tls-1</code>" in page.text and "chatgpt.com" in text
+    assert f"Cut kids-tablet ({TABLET_IP}) off the internet" in text
+    sent = json.dumps([r["json"] for r in env["provider"].requests])
+    assert TABLET_IP not in sent and TABLET_MAC not in sent and "kids-tablet" not in sent

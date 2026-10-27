@@ -216,7 +216,8 @@ def _labels(raw: dict[str, Any]) -> dict[str, str]:
 
 def _suspects(request: Request, raw: dict[str, Any]) -> list[dict[str, Any]]:
     try:
-        rows = evidence.suspects(request.app.state.ai_perimeter_sources, labels=_labels(raw))
+        rows = evidence.suspects(request.app.state.ai_perimeter_sources,
+                                 now=request.app.state.ai_perimeter_clock(), labels=_labels(raw))
     except (OSError, ValueError):
         return []
     for row in rows:
@@ -311,6 +312,7 @@ def explain_device(
 ):
     try:
         bundle, names = evidence.build_bundle(ip, request.app.state.ai_perimeter_sources,
+                                              now=request.app.state.ai_perimeter_clock(),
                                               labels=_labels(raw))
     except LookupError as exc:
         return _page(request, username, raw, error=f"No explanation: {exc}")

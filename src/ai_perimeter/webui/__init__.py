@@ -8,6 +8,8 @@ the screen.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -28,13 +30,15 @@ NAV_SECTION = "Core"
 
 
 def register(app: FastAPI, *, socket_path: Path | str = DEFAULT_SOCKET,
-             timeout: float = DEFAULT_TIMEOUT, sources: Sources = Sources()) -> None:
+             timeout: float = DEFAULT_TIMEOUT, sources: Sources = Sources(),
+             clock: Callable[[], float] = time.time) -> None:
     """Add the screen's routes, templates and sidebar entry to FR_OS's
     webUI app. Safe to call more than once in a process."""
     app.state.ai_perimeter_socket = Path(socket_path)
     app.state.ai_perimeter_timeout = timeout
     app.state.ai_perimeter_proposals = ProposalStore()
     app.state.ai_perimeter_sources = sources
+    app.state.ai_perimeter_clock = clock
     loader = templates.env.loader
     if not (isinstance(loader, ChoiceLoader)
             and any(getattr(l, "searchpath", None) == [str(TEMPLATES_DIR)] for l in loader.loaders)):
