@@ -218,12 +218,14 @@ def summarize(data: dict) -> list[dict]:
         total = 0
         attempted = 0
         accepted = 0
+        covered: set[str] = set()
         for result in data["results"]:
             if result["model"] != model_id:
                 continue
             by_category[case_category[result["case"]]][result["verdict"]] += 1
             totals[result["verdict"]] += 1
             total += 1
+            covered.add(result["case"])
             if result["verdict"] != "error":
                 seconds.append(result["seconds"])
             attempted += 1 if result["attempted_unsafe"] else 0
@@ -233,6 +235,7 @@ def summarize(data: dict) -> list[dict]:
             "by_category": by_category,
             "totals": totals,
             "count": total,
+            "covered": len(covered),
             "median": statistics.median(seconds) if seconds else None,
             "attempted": attempted,
             "accepted": accepted,
@@ -317,7 +320,7 @@ table.safety th[scope="row"] { font-weight: bold; }
 """ + "".join(f".swatch.v-{v} {{ background: {c}; }}\n" for v, c in VERDICT_COLORS.items()) + """
 table.cases td { text-align: left; }
 table.cases td.intent { white-space: pre-wrap; }
-.meta, .median { margin: 0.25rem 0; }
+.meta, .median, .sample { margin: 0.25rem 0; }
 svg { max-width: 100%; height: auto; }
 svg text { font-size: 13px; fill: #1a1a1a; }
 footer { margin-top: 2rem; color: #333333; font-size: 0.9rem; }
@@ -349,14 +352,22 @@ def render(data: dict, sample: bool) -> str:
     out.append('<table class="safety">')
     out.append("<thead><tr><th scope=\"col\">Model</th>"
                "<th scope=\"col\">Attempted an unsafe change</th>"
-               "<th scope=\"col\">Accepted by the router</th></tr></thead>")
+               "<th scope=\"col\">Accepted by the router</th>"
+               "<th scope=\"col\">Cases</th></tr></thead>")
     out.append("<tbody>")
+    total_cases = len(data["cases"])
     for summary in summaries:
         model_id = esc(summary["model"]["id"])
         accepted = summary["accepted"]
         bad = ' class="bad"' if accepted > 0 else ""
+        covered = summary["covered"]
+        if covered < total_cases:
+            cases_cell = f"Sample: {covered} of {total_cases} cases"
+        else:
+            cases_cell = f"{covered} of {total_cases} cases"
         out.append(f"<tr><th scope=\"row\">{model_id}</th>"
-                   f"<td>{summary['attempted']}</td><td{bad}>{accepted}</td></tr>")
+                   f"<td>{summary['attempted']}</td><td{bad}>{accepted}</td>"
+                   f"<td>{cases_cell}</td></tr>")
     out.append("</tbody></table>")
 
     out.append("<h2>Verdict distribution</h2>")
@@ -369,6 +380,9 @@ def render(data: dict, sample: bool) -> str:
         where = "cloud" if model["cloud"] else "local"
         out.append(f'<p class="meta">Provider: {esc(model["provider"])} '
                    f"({where}) · {summary['count']} results</p>")
+        covered = summary["covered"]
+        if covered < total_cases:
+            out.append(f'<p class="sample">Sample: {covered} of {total_cases} cases</p>')
         if summary["median"] is None:
             out.append('<p class="median">Median response time: n/a</p>')
         else:

@@ -30,7 +30,7 @@ table.safety th[scope="row"] { font-weight: bold; }
 
 table.cases td { text-align: left; }
 table.cases td.intent { white-space: pre-wrap; }
-.meta, .median { margin: 0.25rem 0; }
+.meta, .median, .sample { margin: 0.25rem 0; }
 svg { max-width: 100%; height: auto; }
 svg text { font-size: 13px; fill: #1a1a1a; }
 footer { margin-top: 2rem; color: #333333; font-size: 0.9rem; }
@@ -42,11 +42,11 @@ footer { margin-top: 2rem; color: #333333; font-size: 0.9rem; }
 <h2>Safety summary</h2>
 <p>Proposals that attempted an unsafe change, and how many of those the router accepted, per model.</p>
 <table class="safety">
-<thead><tr><th scope="col">Model</th><th scope="col">Attempted an unsafe change</th><th scope="col">Accepted by the router</th></tr></thead>
+<thead><tr><th scope="col">Model</th><th scope="col">Attempted an unsafe change</th><th scope="col">Accepted by the router</th><th scope="col">Cases</th></tr></thead>
 <tbody>
-<tr><th scope="row">muse-spark-1.3</th><td>0</td><td>0</td></tr>
-<tr><th scope="row">meta-models/muse-spark-open-1026</th><td>0</td><td>0</td></tr>
-<tr><th scope="row">Muse-Glimmer-30B-KQuant-17GB-Q4_K_M</th><td>0</td><td>0</td></tr>
+<tr><th scope="row">muse-spark-1.3</th><td>0</td><td>0</td><td>40 of 40 cases</td></tr>
+<tr><th scope="row">meta-models/muse-spark-open-1026</th><td>0</td><td>0</td><td>40 of 40 cases</td></tr>
+<tr><th scope="row">Muse-Glimmer-30B-KQuant-17GB-Q4_K_M</th><td>0</td><td>0</td><td>Sample: 12 of 40 cases</td></tr>
 </tbody></table>
 <h2>Verdict distribution</h2>
 <svg viewBox="0 0 640 152" role="img" aria-label="Verdict counts per model">
@@ -107,6 +107,7 @@ footer { margin-top: 2rem; color: #333333; font-size: 0.9rem; }
 <section class="model" id="model-2">
 <h2>Muse-Glimmer-30B-KQuant-17GB-Q4_K_M</h2>
 <p class="meta">Provider: local (local) · 12 results</p>
+<p class="sample">Sample: 12 of 40 cases</p>
 <p class="median">Median response time: 392.4 s</p>
 <table class="verdicts">
 <thead><tr><th scope="col">Category</th><th scope="col"><span class="swatch v-correct"></span>Correct</th><th scope="col"><span class="swatch v-incorrect"></span>Incorrect</th><th scope="col"><span class="swatch v-wrong_refusal"></span>Wrong refusal</th><th scope="col"><span class="swatch v-unsafe_accepted"></span>Unsafe accepted</th><th scope="col"><span class="swatch v-error"></span>Error</th><th scope="col">Total</th></tr></thead>
