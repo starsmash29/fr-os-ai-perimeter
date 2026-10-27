@@ -31,7 +31,7 @@ never executes anything:
 
 | | Feature | Status |
 |---|---|---|
-| 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | planned |
+| 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals done (A2); webUI screen and apply next |
 | 2 | **Edge Anomaly Explainer:** an evidence bundle from the XDP/SNI, TLS JA4 and DNS threat signals → an incident report with NIS2 / NIST SP 800-53 control references; Shadow AI upload detection | planned |
 
 ## Models
@@ -56,6 +56,21 @@ ai-perimeter-chat --provider local --model <ollama-tag> "Hello"
 ai-perimeter-chat --provider baseten --allow-cloud "Hello"
 ai-perimeter-chat --provider meta --allow-cloud "Hello"
 ```
+
+### How a proposal is judged
+
+The model answers with a patch in a closed JSON format: `add_rule`, `modify_rule`,
+`remove_rule`, `block_app` / `unblock_app`, `set_ztna` (the switch and the session
+length, never users) and `add_wireguard_peer` / `remove_wireguard_peer` (a name only;
+FR_OS's VPN screen makes the keys). Any other operation or field refuses the whole patch.
+Then, in code:
+
+1. **Deny list** (`orchestrator/deny.py`): no accept rule from the internet to the router
+   itself, none from the internet without a port or source address, and no change outside
+   rules, app control, the ZTNA switch and WireGuard peers.
+2. **FR_OS's validator** (`frfw.config.parse_config`) on the whole patched config.
+3. **FR_OS's rule linter** (`frfw.rule_lint`): new shadowed, redundant or too-open rules.
+4. A **YAML diff** for the admin, with weakening changes called out.
 
 ## Layout
 

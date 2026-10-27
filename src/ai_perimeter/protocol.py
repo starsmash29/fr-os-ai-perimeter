@@ -23,6 +23,7 @@ from typing import Any
 TASKS = (
     "ping",
     "status",
+    "propose_patch",
 )
 
 #: Longest accepted request or response line. A task's inputs (an intent,

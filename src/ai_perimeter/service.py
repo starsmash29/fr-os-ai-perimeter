@@ -36,6 +36,7 @@ from frfw.helper.peer import peer_credentials
 
 from . import __version__
 from .client import ChatClient, ConfigError, ProviderError
+from .orchestrator import pipeline
 from .protocol import MAX_LINE_BYTES, ProtocolError, decode_request, encode
 from .settings import DEFAULT_PATH, Settings, load_settings
 
@@ -85,10 +86,31 @@ def _task_status(ctx: Context, args: dict[str, Any]) -> dict[str, Any]:
             "cloud": p.cloud}
 
 
+#: Room for a reasoning model's thinking as well as the patch itself.
+PROPOSE_MAX_TOKENS = 4096
+
+
+def _task_propose_patch(ctx: Context, args: dict[str, Any]) -> dict[str, Any]:
+    """A2: the admin's intent and the current (redacted) config in, a
+    proposal out (orchestrator.pipeline). Nothing is saved here."""
+    unknown = set(args) - {"intent", "config"}
+    if unknown:
+        raise TaskError(f"propose_patch: unknown argument {sorted(unknown)[0]!r}")
+
+    def ask(messages: list[dict[str, str]]) -> str:
+        return ctx.call_model(lambda c: c.chat(messages, max_tokens=PROPOSE_MAX_TOKENS).text)
+
+    try:
+        return pipeline.propose(args.get("intent"), args.get("config"), ask).as_dict()
+    except ValueError as exc:
+        raise TaskError(str(exc)) from None
+
+
 #: Task name -> handler. Later work packages register theirs here.
 HANDLERS: dict[str, Callable[[Context, dict[str, Any]], dict[str, Any]]] = {
     "ping": _task_ping,
     "status": _task_status,
+    "propose_patch": _task_propose_patch,
 }
 
 
