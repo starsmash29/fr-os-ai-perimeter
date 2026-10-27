@@ -1,6 +1,33 @@
 {% extends "base.html" %}
 {% block title %}AI-Perimeter - FR_OS{% endblock %}
 {% block content %}
+<style>
+/* A4 demo polish: scoped to the two "What did the router see?" cards. */
+#router-saw table { margin-bottom: 0.25rem; }
+#router-saw .ap-ip { display: block; }
+#router-saw .ap-reasons { white-space: nowrap; }
+#router-saw th.ap-seen, #router-saw td.ap-seen { text-align: right; white-space: nowrap; }
+#router-saw td.ap-action { text-align: right; vertical-align: middle; white-space: nowrap; }
+#router-saw td.ap-action form { margin: 0; }
+#explanation .ap-title { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+#explanation .ap-summary { font-size: 14px; line-height: 1.6; max-width: 70ch; }
+#explanation .ap-evidence { list-style: none; margin: 0 0 1rem; padding: 0; }
+#explanation .ap-evidence li { padding: 0.25rem 0; overflow-wrap: anywhere; }
+#explanation .ap-evidence code { white-space: nowrap; }
+#explanation .ap-controls { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+#explanation .ap-callout { border: 1px solid var(--info); border-radius: var(--radius); padding: 0.7rem 0.95rem; }
+#explanation .ap-suggest { border: 1px solid var(--outline); border-radius: var(--radius); padding: 0.7rem 0.95rem; }
+#explanation pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  #router-saw thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  #router-saw table, #router-saw tbody, #router-saw tr, #router-saw td { display: block; }
+  #router-saw tbody tr { padding: 0.5rem 0; }
+  #router-saw tbody tr + tr { margin-top: 0.5rem; }
+  #router-saw td { border-bottom: 0; padding: 0.15rem 0; }
+  #router-saw td.ap-seen, #router-saw td.ap-action { text-align: left; }
+  #router-saw .ap-reasons { white-space: normal; }
+}
+</style>
 {% set can_change = request.state.user is defined and request.state.user.is_admin %}
 <h1>AI-Perimeter</h1>
 <p class="muted">
@@ -32,15 +59,15 @@
   <p class="muted">Devices FR_OS's sensors flagged in the last 24 hours. An explanation sends the model
     this device's evidence under a pseudonym: no address, MAC or name.</p>
   <table>
-    <thead><tr><th>Device</th><th>Why it is listed</th><th>AI services</th><th>Last seen</th><th></th></tr></thead>
+    <thead><tr><th>Device</th><th>Why it is listed</th><th>AI services</th><th class="ap-seen">Last seen</th><th></th></tr></thead>
     <tbody>
     {% for s in suspects %}
     <tr>
-      <td>{{ s.name or s.ip }}{% if s.name %} <span class="muted">{{ s.ip }}</span>{% endif %}</td>
-      <td>{% for r in s.reasons %}<span class="badge {{ 'badge-red' if r == 'tls_blocklist' else 'badge-yellow' }}">{{ r | replace('_', ' ') }}</span> {% endfor %}</td>
+      <td><strong>{{ s.name or s.ip }}</strong>{% if s.name %}<span class="muted ap-ip">{{ s.ip }}</span>{% endif %}</td>
+      <td class="ap-reasons">{% for r in s.reasons %}<span class="badge {{ 'badge-red' if r == 'tls_blocklist' else 'badge-yellow' }}">{{ r | replace('_', ' ') }}</span> {% endfor %}</td>
       <td>{{ s.ai_services | join(', ') }}</td>
-      <td>{{ s.last_seen }}</td>
-      <td>{% if can_change %}
+      <td class="ap-seen">{{ s.last_seen }}</td>
+      <td class="ap-action">{% if can_change %}
         <form method="post" action="/ai-perimeter/explain">
           {{ csrf_input(request) }}
           <input type="hidden" name="ip" value="{{ s.ip }}">
@@ -58,19 +85,19 @@
 {% if explanation %}
 <div class="card" id="explanation">
   {% if explanation.status == "ready" %}
-  <h3>{{ explanation.title }}
+  <h3 class="ap-title">{{ explanation.title }}
     <span class="badge {{ {'high': 'badge-red', 'medium': 'badge-yellow', 'low': 'badge-green'}[explanation.severity] }}">{{ explanation.severity }}</span>
   </h3>
   <p class="muted">{{ explanation.device }}</p>
-  <p>{{ explanation.summary }}</p>
+  <p class="ap-summary">{{ explanation.summary }}</p>
   {% if explanation.severity_raised %}<p class="muted">The severity was raised to what the evidence alone shows.</p>{% endif %}
   <h4>Evidence</h4>
-  <ul>{% for e in explanation.evidence %}<li><code>{{ e.id }}</code> {{ e.item | tojson }}</li>{% endfor %}</ul>
+  <ul class="ap-evidence">{% for e in explanation.evidence %}<li><code>{{ e.id }}</code> {{ e.item | tojson }}</li>{% endfor %}</ul>
   <h4>Related controls</h4>
-  <p>{{ explanation.controls | join(' · ') }}</p>
-  {% if explanation.nis2_note %}<p><span class="badge badge-red">NIS2</span> {{ explanation.nis2_note }}</p>{% endif %}
+  <p class="ap-controls">{% for c in explanation.controls %}<span class="badge">{{ c }}</span> {% endfor %}</p>
+  {% if explanation.nis2_note %}<p class="ap-callout"><span class="badge badge-blue">NIS2</span> {{ explanation.nis2_note }}</p>{% endif %}
   {% if explanation.suggested_intent %}
-  <p>Suggested change, copied into the request box below: <em>{{ explanation.suggested_intent }}</em>. Nothing changes until you propose, review and save it.</p>
+  <p class="ap-suggest">Suggested change, copied into the request box below: <em>{{ explanation.suggested_intent }}</em>. Nothing changes until you propose, review and save it.</p>
   {% endif %}
   {% else %}
   <h3>No explanation <span class="badge badge-red">refused</span></h3>
