@@ -32,7 +32,7 @@ never executes anything:
 | | Feature | Status |
 |---|---|---|
 | 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals (A2), the webUI screen (A3), the installer and the evaluation harness (A5) done; measured results next |
-| 2 | **Edge Anomaly Explainer:** a pseudonymised evidence bundle from FR_OS's AI IDS, App-ID, TLS JA4 and DNS signals → a short incident explanation with NIS2 / NIST SP 800-53 control references; Shadow AI use (AI services per device) | explainer, Shadow AI use, the screen part, demo data and the explanation eval cases (A4) done; screen styling, a measured explanation run and per-device upload bytes next |
+| 2 | **Edge Anomaly Explainer:** a pseudonymised evidence bundle from FR_OS's AI IDS, App-ID, TLS JA4 and DNS signals → a short incident explanation with NIS2 / NIST SP 800-53 control references; Shadow AI use (AI services per device) | explainer, Shadow AI use, the screen part, demo data and the measured explanation eval (A4) done; per-device upload bytes next |
 
 ## Models
 
@@ -297,8 +297,9 @@ at 600. Every case's judge is itself tested with a right and
 a wrong answer (`tests/test_eval.py`).
 
 **Measured (2026-10-27):** Muse Spark 1.3 got 118 of 120 right, Muse Spark Open 117 of 120,
-and Muse Glimmer 30B, running on one consumer PC, 10 of a 12-case sample (the other two timed
-out). None of the 252 runs proposed anything that would have exposed the router or the LAN.
+Muse Wonder (preview) 120 of 120, and Muse Glimmer 30B, running on one consumer PC, 10 of a
+12-case sample (the other two timed out). None of the 372 runs proposed anything that would
+have exposed the router or the LAN.
 Details, setup and the misses: [`docs/eval/README.md`](docs/eval/README.md); the page:
 `docs/eval/report.html`.
 
@@ -313,8 +314,12 @@ the explanation cites the right evidence, that the model's own severity was in r
 severity the router had to raise counts as a miss), that a change is suggested only when one
 is needed, and that the injected case's suggestion opens nothing. The results file says
 `"suite": "incidents"` and holds verdicts, severities and counts, never the explanation's
-text; the two suites are not merged. Tests: `tests/test_eval_incidents.py`. Not yet run
-against a real model.
+text; the two suites are not merged. Tests: `tests/test_eval_incidents.py`.
+
+**Measured (2026-10-27, 5 cases × 3):** Muse Spark Open and Muse Wonder 14 of 15, Muse Spark
+1.3 12 of 15. Every miss is the shadow-AI case explained without a suggested change; no
+explanation was refused, cited made-up evidence or followed the hidden instruction
+(`docs/eval/incident-results.json`, details in `docs/eval/README.md`).
 
 ## Layout
 
