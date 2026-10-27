@@ -1,7 +1,7 @@
 # Architecture and trust boundaries
 
-This document describes the implementation on `main` at
-[`2e75a56`](https://github.com/starsmash29/fr-os-ai-perimeter/tree/2e75a56a9130bb07bc13f786f45d382403751753).
+This document describes the implementation on `main` after the installer
+(PR #8).
 FR_OS is a pre-existing, pinned dependency; AI-Perimeter adds proposal handling
 and an integrated webUI screen. The model proposes data. It has no firewall
 execution or save authority.
@@ -135,10 +135,12 @@ flowchart LR
   [`service.allowed_uids`](../src/ai_perimeter/service.py) also checks
   kernel-reported peer credentials: root, the service's own UID (for a
   development run), or the webUI account. Named tasks are `ping`, `status`
-  and `propose_patch`; only one model call runs at a time.
-- **Model endpoint:** the local inference process is separate from the
-  AI service sandbox. TODO(claude): verify its deployed OS account and sandbox;
-  no model-server unit is supplied on this `main` snapshot. A remote provider's
+  and `propose_patch`; only one model call runs at a time (a second request
+  while one runs is refused as busy, not queued).
+- **Model endpoint:** the local inference process (llama.cpp or Ollama) is
+  separate from the AI service sandbox and is run by the operator; this
+  repository ships no unit for it, so its account and sandbox are the
+  operator's choice. It should listen on loopback only. A remote provider's
   OS identity is outside this repository's control.
 - **Privileged helper:** FR_OS owns configuration writes and Apply. The
   [pinned `try_save` implementation](https://github.com/starsmash29/fr_os-hackathon/blob/815576493ca8c6512244bae9b482d6923c575650/src/frfw/webui/actions.py)
@@ -172,10 +174,19 @@ linter finding; informational findings may still appear. `warnings` is
 savable after the admin reviews the warnings. `refused` and `nothing`
 are not savable. Service/transport failures are errors, not proposals.
 
-The service code, unit files and
-[webUI integration patch](../integration/fr_os/0001-ai-perimeter-screen.patch)
-are present on this snapshot. TODO(claude): verify installer completion and
-the deployed end-to-end systemd/Apply path before claiming a packaged install.
+### How it joins FR_OS
+
+No FR_OS file is changed, so FR_OS's own integrity check (which compares the
+installed files with the signed release) stays clean. `fr-webui-ai` runs
+FR_OS's unchanged webUI code and adds the screen and its sidebar entry in
+memory; a systemd drop-in for `fr-webui.service` starts it in place of
+`fr-webui`, under FR_OS's own account and sandbox. See
+[integration/fr_os/README.md](../integration/fr_os/README.md).
+[`installer/install.sh`](../installer/install.sh) installs the package, the
+units and the drop-in, and the `install` CI job runs it on a real systemd
+next to FR_OS's real `fr-webui.service`. Saving and FR_OS's Apply with
+commit-confirm on a full FR_OS router are exercised in the demo environment,
+not in CI.
 The README still marks the anomaly explainer and Shadow AI as planned; they
 are not part of the implemented proposal path shown above.
 
