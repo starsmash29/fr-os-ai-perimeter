@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}AI-Perimeter - FR_OS{% endblock %}
+{% block content %}
+{% set can_change = request.state.user is defined and request.state.user.is_admin %}
+<h1>AI-Perimeter</h1>
+<p class="muted">
+  Describe a change in plain words. A language model proposes it as a patch; the
+  router's own checks judge it, and you see exactly what would change. Nothing is
+  saved until you approve it, and nothing is loaded until you click Apply, which
+  goes back by itself unless you confirm it.
+</p>
+
+<div class="card">
+  <h3>Model</h3>
+  {% if status.error %}
+  <p><span class="badge">off</span> {{ status.error }}.</p>
+  {% elif not status.enabled %}
+  <p><span class="badge">off</span> The AI-Perimeter is switched off (<code>/etc/fr_os/ai-perimeter.yaml</code>).</p>
+  {% else %}
+  <p>
+    {% if status.cloud %}<span class="badge badge-yellow">cloud</span>{% else %}<span class="badge badge-green">local</span>{% endif %}
+    <code>{{ status.model }}</code> via {{ status.provider }}.
+    {% if status.cloud %}The model sees a copy of the configuration without passwords, keys or tokens.{% else %}Nothing leaves this network.{% endif %}
+  </p>
+  {% endif %}
+</div>
+
+{% if can_change %}
+<div class="card">
+  <h3>What should change?</h3>
+  <form method="post" action="/ai-perimeter/propose">
+    {{ csrf_input(request) }}
+    <textarea name="intent" rows="3" maxlength="{{ max_intent }}" required style="width:100%"
+      placeholder="e.g. The kids' tablet should be offline on weekdays between 22:00 and 06:00">{{ intent }}</textarea>
+    <button type="submit">Propose</button>
+    <span class="muted">A local model can take a minute to answer.</span>
+  </form>
+</div>
+{% endif %}
+
+{% if proposal %}
+<div class="card">
+  <h3>Proposal
+    {% if proposal.status == "ready" %}<span class="badge badge-green">ready</span>
+    {% elif proposal.status == "warnings" %}<span class="badge badge-yellow">check the warnings</span>
+    {% elif proposal.status == "refused" %}<span class="badge badge-red">refused</span>
+    {% else %}<span class="badge">nothing to change</span>{% endif %}
+  </h3>
+  {% if proposal.summary %}<p>{{ proposal.summary }}</p>{% endif %}
+
+  {% if proposal.problems %}
+  <h4>Why it was refused</h4>
+  <ul>{% for p in proposal.problems %}<li>{{ p }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if proposal.operations %}
+  <h4>Changes</h4>
+  <ol>{% for op in proposal.operations %}<li><code>{{ op }}</code></li>{% endfor %}</ol>
+  {% endif %}
+
+  {% if proposal.cautions %}
+  <h4>This weakens the firewall</h4>
+  <ul>{% for c in proposal.cautions %}<li><span class="badge badge-yellow">caution</span> {{ c }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if proposal.findings %}
+  <h4>Rule check</h4>
+  <ul>{% for f in proposal.findings %}
+    <li><span class="badge {{ 'badge-yellow' if f.severity == 'warning' else 'badge-blue' }}">{{ f.kind }}</span> <code>{{ f.rule }}</code>: {{ f.message }}</li>
+  {% endfor %}</ul>
+  {% endif %}
+
+  {% if proposal.handoffs %}
+  <h4>Finish on the VPN screen</h4>
+  <ul>{% for h in proposal.handoffs %}
+    <li>WireGuard device <code>{{ h.name }}</code>{% if h.address %} (expected address {{ h.address }}){% endif %}:
+      add it on the <a href="/vpn">VPN</a> screen, which makes its keys and shows its config once.</li>
+  {% endfor %}</ul>
+  {% endif %}
+
+  {% if proposal.diff %}
+  <h4>config.yaml</h4>
+  <pre class="ai-diff">{% for kind, line in proposal.diff %}<span style="{% if kind == 'add' %}color:var(--success){% elif kind == 'del' %}color:var(--error){% elif kind == 'hunk' %}color:var(--info){% elif kind == 'file' %}color:var(--outline){% endif %}">{{ line }}</span>
+{% endfor %}</pre>
+  {% endif %}
+
+  <details>
+    <summary>Why? (the model's own reasoning)</summary>
+    {% if proposal.reasoning %}
+    <pre>{{ proposal.reasoning }}</pre>
+    <p class="muted">Shown as the model wrote it. The router acts only on the changes listed above, after its own checks.</p>
+    {% else %}
+    <p class="muted">This model did not give its reasoning; the summary above is its explanation.</p>
+    {% endif %}
+  </details>
+
+  {% if proposal_id and can_change %}
+  <form method="post" action="/ai-perimeter/save">
+    {{ csrf_input(request) }}
+    <input type="hidden" name="proposal_id" value="{{ proposal_id }}">
+    <button type="submit">Approve and save</button>
+    <span class="muted">Then click Apply to load it.</span>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

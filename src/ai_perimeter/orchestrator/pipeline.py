@@ -41,6 +41,9 @@ from .prompt import build_messages, clean_intent
 
 READY, WARNINGS, REFUSED, NOTHING = "ready", "warnings", "refused", "nothing"
 
+#: How much of a reasoning model's thinking the admin is shown ("Why?").
+MAX_REASONING = 8000
+
 
 @dataclass
 class Proposal:
@@ -52,6 +55,9 @@ class Proposal:
     problems: list[str] = field(default_factory=list)
     cautions: list[str] = field(default_factory=list)
     handoffs: list[dict[str, Any]] = field(default_factory=list)
+    #: The model's own reasoning, when it gives one: shown to the admin as
+    #: untrusted text, never parsed (the patch is the only thing acted on).
+    reasoning: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -69,17 +75,24 @@ def current_config(raw: Any) -> tuple[dict[str, Any], Config]:
         raise ValueError(f"the current config is not valid, fix it first: {exc}") from None
 
 
-def propose(intent: Any, raw: Any, ask: Callable[[list[dict[str, str]]], str], *,
+def propose(intent: Any, raw: Any, ask: Callable[[list[dict[str, str]]], tuple[str, str]], *,
             now: float | None = None) -> Proposal:
-    """Ask the model (``ask(messages) -> answer text``) and judge its patch."""
+    """Ask the model (``ask(messages) -> (answer, reasoning)``) and judge
+    its patch."""
     intent = clean_intent(intent)
     before_raw, before = current_config(raw)
-    answer = ask(build_messages(intent, before, before_raw))
+    answer, reasoning = ask(build_messages(intent, before, before_raw))
+    reasoning = (reasoning or "").strip()
+    if len(reasoning) > MAX_REASONING:
+        reasoning = reasoning[:MAX_REASONING] + " [...]"
     try:
         patch = parse_patch(answer)
     except PatchError as exc:
-        return Proposal(status=REFUSED, problems=[f"the model's answer was refused: {exc}"])
-    return evaluate(before_raw, before, patch, now=now)
+        proposal = Proposal(status=REFUSED, problems=[f"the model's answer was refused: {exc}"])
+    else:
+        proposal = evaluate(before_raw, before, patch, now=now)
+    proposal.reasoning = reasoning
+    return proposal
 
 
 def evaluate(before_raw: dict[str, Any], before: Config, patch: Patch, *,
