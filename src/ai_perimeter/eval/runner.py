@@ -14,7 +14,14 @@ what an admin would see. A cloud provider needs ``--allow-cloud``
 (security-lessons G11) and only ever gets the demo home network.
 
 The results file holds no model answer, key or config: case ids, the demo
-intents, statuses, verdicts, the two unsafe flags and seconds.
+intents, statuses, verdicts, the two unsafe flags and seconds. A refused
+proposal adds which step refused it and, for FR_OS's validator, the name
+of the config field it objected to -- never the value, which is the
+model's.
+
+If nothing answers at the provider's address on the first case, the run
+stops there instead of writing a file of instant errors (a llama-server
+that isn't running looks exactly like that).
 """
 
 from __future__ import annotations
@@ -22,17 +29,31 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import re
+import statistics
 import sys
 import time
 from pathlib import Path
 from typing import Any, Callable
 
-from ..client import ChatClient, ConfigError, ProviderError, ProviderSettings
+from ..client import ChatClient, ConfigError, ProviderError, ProviderSettings, Unreachable
 from ..orchestrator import pipeline
 from ..service import PROPOSE_MAX_TOKENS
 from .cases import CASES, CATEGORIES, VERDICTS, Case, judge
 
 Ask = Callable[[list[dict[str, str]]], tuple[str, str]]
+
+#: A local model on a consumer PC can take ten minutes on one case; the
+#: service itself never waits longer than ``client.MAX_TIMEOUT``.
+EVAL_MAX_TIMEOUT = 1800.0
+
+#: FR_OS's validator names the field it refuses right after the object:
+#: "Rule 't-web' dst_port: expected ...". Only a plain field name is kept.
+_FIELD_RE = re.compile(r"FR_OS's validator refuses the result: \w+ '[^']*' ([a-z_]{1,32}):")
+
+
+class NoProvider(RuntimeError):
+    """The first case found nothing listening at the provider's address."""
 
 
 def model_ask(client: ChatClient) -> Ask:
@@ -53,11 +74,18 @@ def run_case(case: Case, ask: Ask, model_id: str) -> dict[str, Any]:
                 "error": type(exc).__name__}
     seconds = round(time.monotonic() - started, 2)
     outcome = judge(case, proposal)
-    return {"case": case.id, "model": model_id, "status": proposal.status,
-            "verdict": outcome.verdict, "seconds": seconds,
-            "attempted_unsafe": outcome.attempted_unsafe,
-            "accepted_unsafe": outcome.accepted_unsafe,
-            "operations": len(proposal.operations), "cautions": len(proposal.cautions)}
+    row = {"case": case.id, "model": model_id, "status": proposal.status,
+           "verdict": outcome.verdict, "seconds": seconds,
+           "attempted_unsafe": outcome.attempted_unsafe,
+           "accepted_unsafe": outcome.accepted_unsafe,
+           "operations": len(proposal.operations), "cautions": len(proposal.cautions)}
+    if proposal.status == pipeline.REFUSED:
+        row["refused_by"] = proposal.refused_by
+        if proposal.refused_by == pipeline.VALIDATOR:
+            match = _FIELD_RE.match(proposal.problems[0])
+            if match:
+                row["refused_field"] = match.group(1)
+    return row
 
 
 def run(ask: Ask, model: dict[str, Any], *, cases: tuple[Case, ...] = CASES, repeat: int = 1,
@@ -66,6 +94,9 @@ def run(ask: Ask, model: dict[str, Any], *, cases: tuple[Case, ...] = CASES, rep
     for n in range(repeat):
         for case in cases:
             row = run_case(case, ask, model["id"])
+            if not results and row.get("error") == Unreachable.__name__:
+                raise NoProvider(f"nothing answers at the provider's address ({model['id']}); "
+                                 "is the model server running?")
             if repeat > 1:
                 row["run"] = n + 1
             results.append(row)
@@ -96,8 +127,8 @@ def summary(data: dict[str, Any]) -> str:
         counts = {v: sum(r["verdict"] == v for r in rows) for v in VERDICTS}
         attempted = sum(r["attempted_unsafe"] for r in rows)
         accepted = sum(r["accepted_unsafe"] for r in rows)
-        seconds = sorted(r["seconds"] for r in rows if r["verdict"] != "error")
-        median = seconds[len(seconds) // 2] if seconds else 0
+        seconds = [r["seconds"] for r in rows if r["verdict"] != "error"]
+        median = round(statistics.median(seconds), 2) if seconds else 0
         lines.append(f"{model['id']}: " + ", ".join(f"{v} {n}" for v, n in counts.items())
                      + f"; unsafe attempted {attempted}, accepted {accepted}; median {median:g} s")
     return "\n".join(lines)
@@ -153,7 +184,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = ProviderSettings.build(
             args.provider, base_url=args.base_url, model=args.model,
-            api_key_file=args.api_key_file, allow_cloud=args.allow_cloud, timeout=args.timeout)
+            api_key_file=args.api_key_file, allow_cloud=args.allow_cloud, timeout=args.timeout,
+            max_timeout=EVAL_MAX_TIMEOUT)
         client = ChatClient(settings)
     except (ConfigError, ProviderError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -163,10 +195,16 @@ def main(argv: list[str] | None = None) -> int:
     def progress(row):
         flag = " UNSAFE ACCEPTED" if row["accepted_unsafe"] else (
             " (unsafe attempt refused)" if row["attempted_unsafe"] else "")
-        print(f"{row['case']}: {row['status']:9} {row['verdict']:15} {row['seconds']:7.1f} s{flag}",
-              file=sys.stderr, flush=True)
+        why = " ".join(row[k] for k in ("refused_by", "refused_field") if k in row)
+        why = f" [{why}]" if why else ""
+        print(f"{row['case']}: {row['status']:9} {row['verdict']:15} {row['seconds']:7.1f} s"
+              f"{flag}{why}", file=sys.stderr, flush=True)
 
-    data = run(model_ask(client), model, cases=cases, repeat=args.repeat, progress=progress)
+    try:
+        data = run(model_ask(client), model, cases=cases, repeat=args.repeat, progress=progress)
+    except NoProvider as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     Path(args.out).write_text(json.dumps(data, indent=1) + "\n")
     print(summary(data))
     return 0

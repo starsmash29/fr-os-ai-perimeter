@@ -43,6 +43,8 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_REQUEST_BYTES = 256 * 1024
 MAX_KEY_BYTES = 4096
 DEFAULT_TIMEOUT = 120.0
+#: The longest the service waits for one answer (the eval may allow more).
+MAX_TIMEOUT = 600.0
 
 _NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
 _MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
@@ -80,6 +82,11 @@ class ConfigError(ValueError):
 
 class ProviderError(RuntimeError):
     """The provider could not be reached or gave an unusable answer."""
+
+
+class Unreachable(ProviderError):
+    """Nothing answered at the provider's address (refused, no route, no
+    such host): unlike a timeout, nothing is running there to wait for."""
 
 
 def _is_local_host(host: str) -> bool:
@@ -170,8 +177,13 @@ class ProviderSettings:
               model: str | None = None,
               api_key_file: str | os.PathLike[str] | None = None,
               allow_cloud: bool = False,
-              timeout: float = DEFAULT_TIMEOUT) -> "ProviderSettings":
-        """Validate settings, filling unset values from :data:`PRESETS`."""
+              timeout: float = DEFAULT_TIMEOUT,
+              max_timeout: float = MAX_TIMEOUT) -> "ProviderSettings":
+        """Validate settings, filling unset values from :data:`PRESETS`.
+
+        ``max_timeout`` is for the evaluation only: a local model on a
+        consumer PC may need longer than the service ever waits for an
+        admin's proposal."""
         if not isinstance(name, str) or not _NAME_RE.match(name):
             raise ConfigError("provider name must be a short lowercase word")
         preset = PRESETS.get(name, {})
@@ -187,8 +199,8 @@ class ProviderSettings:
         if cloud and key_file is None:
             raise ConfigError(f"cloud provider {name!r} needs an api_key_file")
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) \
-                or not 1 <= timeout <= 600:
-            raise ConfigError("timeout must be 1-600 seconds")
+                or not 1 <= timeout <= max_timeout:
+            raise ConfigError(f"timeout must be 1-{max_timeout:g} seconds")
         return cls(name=name, base_url=url, model=model, cloud=cloud,
                    api_key_file=Path(key_file).expanduser() if key_file else None,
                    timeout=float(timeout))
@@ -312,7 +324,7 @@ class ChatClient:
             if isinstance(exc.reason, (TimeoutError, socket.timeout)):
                 raise ProviderError(f"{name}: no answer within "
                                     f"{self.settings.timeout:g} s") from None
-            raise ProviderError(
+            raise Unreachable(
                 f"{name}: can't reach the provider "
                 f"({self._scrub(str(exc.reason))})") from None
         if len(raw) > MAX_RESPONSE_BYTES:

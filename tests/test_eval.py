@@ -20,6 +20,7 @@ from frfw.config import parse_config
 
 from ai_perimeter.eval import cases as ev
 from ai_perimeter.eval import runner, sim
+from ai_perimeter.client import Unreachable
 from ai_perimeter.eval.cases import CASES, NAS, TABLET, TV, judge
 from ai_perimeter.orchestrator import pipeline
 from ai_perimeter.orchestrator.ops import patch_from_dict
@@ -376,3 +377,83 @@ def test_a_cloud_provider_needs_the_opt_in(tmp_path, capsys):
     assert runner.main(["run", "--provider", "meta", "--out", str(tmp_path / "x.json")]) == 1
     assert "allow" in capsys.readouterr().err.lower()
     assert not (tmp_path / "x.json").exists()
+
+
+# --- why a proposal was refused --------------------------------------------------------
+
+#: What the cloud models most likely wrote for g13: both ports in one value,
+#: which FR_OS's validator does not take (an integer or "start-end" only).
+TWO_PORTS = [op_rule({"name": "tablet-web", "action": "accept", "from_zone": "lan",
+                      "to_zone": "wan", "proto": "tcp", "dst_port": "80,443", "src_mac": TAB},
+                     "start")]
+
+
+def test_a_refusal_records_the_step_and_field_not_the_value(tmp_path):
+    m = CaseModel(lambda case: TWO_PORTS)
+    try:
+        out = tmp_path / "r.json"
+        assert runner.main(["run", "--provider", "local", "--base-url", m.url, "--model", "m",
+                            "--only", "g13", "--out", str(out)]) == 0
+    finally:
+        m.close()
+    [row] = json.loads(out.read_text())["results"]
+    assert (row["status"], row["verdict"]) == ("refused", "wrong_refusal")
+    assert (row["refused_by"], row["refused_field"]) == ("validator", "dst_port")
+    text = out.read_text()
+    assert "80,443" not in text and "tablet-web" not in text
+
+
+def test_the_deny_list_is_named_as_the_refusing_step():
+    case = next(c for c in CASES if c.id == "d01")
+    row = runner.run_case(case, lambda messages: (json.dumps(
+        {"summary": "x", "operations": [SSH_FROM_WAN]}), ""), "m")
+    assert (row["status"], row["refused_by"]) == ("refused", "deny")
+    assert "refused_field" not in row
+
+
+def test_an_answer_that_is_no_patch_is_refused_by_the_answer_step():
+    case = next(c for c in CASES if c.id == "g01")
+    row = runner.run_case(case, lambda messages: ("I would block it.", ""), "m")
+    assert (row["status"], row["refused_by"]) == ("refused", "answer")
+
+
+def test_nothing_listening_stops_the_run_before_writing(tmp_path, capsys):
+    m = CaseModel(lambda case: NOTHING)
+    url = m.url
+    m.close()
+    out = tmp_path / "r.json"
+    assert runner.main(["run", "--provider", "local", "--base-url", url, "--model", "m",
+                        "--only", "good", "--out", str(out)]) == 1
+    assert "running" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_a_server_lost_mid_run_is_an_error_row():
+    """Only the first case stops the run: after an answer, the results so far count."""
+    answers = iter([(json.dumps({"summary": "x", "operations": []}), "")])
+
+    def ask(messages):
+        try:
+            return next(answers)
+        except StopIteration:
+            raise Unreachable("local: can't reach the provider") from None
+
+    model = {"id": "m", "provider": "local", "cloud": False}
+    data = runner.run(ask, model, cases=CASES[:3])
+    assert [r.get("error") for r in data["results"]] == [None, "Unreachable", "Unreachable"]
+
+
+def test_the_summary_median_is_the_statistical_median():
+    rows = [{"model": "m", "verdict": v, "seconds": s, "attempted_unsafe": False,
+             "accepted_unsafe": False}
+            for v, s in (("correct", 1.0), ("correct", 2.0), ("correct", 3.0),
+                         ("correct", 4.0), ("error", 600.0))]
+    data = {"models": [{"id": "m"}], "results": rows}
+    assert runner.summary(data).endswith("median 2.5 s")
+
+
+def test_the_eval_may_wait_longer_than_the_service(tmp_path, capsys):
+    out = tmp_path / "r.json"
+    assert runner.main(["run", "--provider", "local", "--base-url", "http://127.0.0.1:9/v1",
+                        "--model", "m", "--timeout", "2400", "--out", str(out)]) == 1
+    assert "1-1800" in capsys.readouterr().err

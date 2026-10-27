@@ -21,6 +21,7 @@ from ai_perimeter.client import (
     ChatClient,
     ConfigError,
     ProviderError,
+    Unreachable,
     ProviderSettings,
     read_api_key,
 )
@@ -209,7 +210,7 @@ def test_a_slow_provider_times_out(provider):
 def test_an_unreachable_provider_is_reported(provider):
     url = provider.url
     provider.close()
-    with pytest.raises(ProviderError, match="can't reach"):
+    with pytest.raises(Unreachable, match="can't reach"):
         ChatClient(ProviderSettings.build("local", base_url=url, model="m")).chat(
             [{"role": "user", "content": "x"}])
     provider.close = lambda: None
@@ -345,3 +346,13 @@ def test_the_cli_prints_the_answer(provider, capsys):
 def test_the_cli_refuses_a_cloud_provider_without_the_flag(capsys):
     assert cli.main(["--provider", "meta", "hi"]) == 1
     assert "allow_cloud" in capsys.readouterr().err
+
+
+def test_the_service_waits_at_most_ten_minutes():
+    """Only the evaluation may allow longer (a local model on a consumer PC)."""
+    with pytest.raises(ConfigError, match="1-600"):
+        ProviderSettings.build("local", base_url="http://127.0.0.1:8080/v1", model="m",
+                               timeout=1200)
+    s = ProviderSettings.build("local", base_url="http://127.0.0.1:8080/v1", model="m",
+                               timeout=1200, max_timeout=1800)
+    assert s.timeout == 1200.0
