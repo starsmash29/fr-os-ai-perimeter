@@ -20,6 +20,7 @@ dependencies = [
 ai-perimeter-chat = "ai_perimeter.cli:main"
 fr-ai-assist = "ai_perimeter.service:main"
 fr-webui-ai = "ai_perimeter.webui.server:main"
+ai-perimeter-eval = "ai_perimeter.eval.runner:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "httpx>=0.27"]
@@ -33,7 +34,7 @@ webui = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-ai_perimeter = ["webui/templates/*.html"]
+ai_perimeter = ["webui/templates/*.html", "eval/home.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
