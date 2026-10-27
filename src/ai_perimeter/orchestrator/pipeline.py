@@ -18,6 +18,10 @@ A proposal's status:
   rule that never matches, one that opens too much) -- the admin decides;
 - ``refused``: the deny list or FR_OS's validator said no; it can't be saved;
 - ``nothing``: the model proposed no operation (its summary says why).
+
+A refused proposal also says which step refused it (``refused_by``), so a
+measurement can tell a model that wrote an invalid value from one that
+tried to open the network without keeping the model's own words.
 """
 
 from __future__ import annotations
@@ -41,6 +45,11 @@ from .prompt import build_messages, clean_intent
 
 READY, WARNINGS, REFUSED, NOTHING = "ready", "warnings", "refused", "nothing"
 
+#: The steps that can refuse a proposal, in pipeline order: the answer is
+#: not a patch, the patch doesn't apply, FR_OS's validator, the deny list,
+#: a WireGuard hand-off FR_OS's VPN screen would not accept.
+ANSWER, PATCH, VALIDATOR, DENY, HANDOFF = "answer", "patch", "validator", "deny", "handoff"
+
 #: How much of a reasoning model's thinking the admin is shown ("Why?").
 MAX_REASONING = 8000
 
@@ -55,6 +64,8 @@ class Proposal:
     problems: list[str] = field(default_factory=list)
     cautions: list[str] = field(default_factory=list)
     handoffs: list[dict[str, Any]] = field(default_factory=list)
+    #: Which step refused the proposal (one of :data:`ANSWER` ... :data:`HANDOFF`).
+    refused_by: str = ""
     #: The model's own reasoning, when it gives one: shown to the admin as
     #: untrusted text, never parsed (the patch is the only thing acted on).
     reasoning: str = ""
@@ -88,7 +99,8 @@ def propose(intent: Any, raw: Any, ask: Callable[[list[dict[str, str]]], tuple[s
     try:
         patch = parse_patch(answer)
     except PatchError as exc:
-        proposal = Proposal(status=REFUSED, problems=[f"the model's answer was refused: {exc}"])
+        proposal = Proposal(status=REFUSED, refused_by=ANSWER,
+                            problems=[f"the model's answer was refused: {exc}"])
     else:
         proposal = evaluate(before_raw, before, patch, now=now)
     proposal.reasoning = reasoning
@@ -106,7 +118,7 @@ def evaluate(before_raw: dict[str, Any], before: Config, patch: Patch, *,
     try:
         applied = apply_patch(before_raw, patch)
     except PatchError as exc:
-        proposal.status = REFUSED
+        proposal.status, proposal.refused_by = REFUSED, PATCH
         proposal.problems.append(str(exc))
         return proposal
     proposal.diff = _diff(before_raw, applied.raw)
@@ -115,14 +127,15 @@ def evaluate(before_raw: dict[str, Any], before: Config, patch: Patch, *,
     try:
         after = parse_config(applied.raw)
     except ConfigError as exc:
-        proposal.status = REFUSED
+        proposal.status, proposal.refused_by = REFUSED, VALIDATOR
         proposal.problems.append(f"FR_OS's validator refuses the result: {exc}")
         return proposal
 
     proposal.problems += deny.refusals(before_raw, applied.raw, before, after, applied.touched_rules)
     proposal.handoffs, problems = _check_handoffs(applied)
-    proposal.problems += problems
-    if proposal.problems:
+    if proposal.problems or problems:
+        proposal.refused_by = DENY if proposal.problems else HANDOFF
+        proposal.problems += problems
         proposal.status = REFUSED
         return proposal
 

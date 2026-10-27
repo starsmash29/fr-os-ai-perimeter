@@ -261,7 +261,12 @@ ai-perimeter-eval merge glimmer.json spark-open.json spark.json --out docs/eval/
 ```
 
 The results file holds case ids, the demo intents, statuses, verdicts, the unsafe flags and
-seconds: no model answer, key or config. Every case's judge is itself tested with a right and
+seconds: no model answer, key or config. A refused proposal also says which step refused it
+(`answer`, `patch`, `validator`, `deny` or `handoff`) and, for FR_OS's validator, the field
+it objected to (`dst_port`), never the value. If nothing answers at the provider's address on
+the first case, the run stops with an error instead of writing a file of errors. The
+evaluation's `--timeout` goes up to 1800 seconds for a slow local model; the service's stays
+at 600. Every case's judge is itself tested with a right and
 a wrong answer (`tests/test_eval.py`).
 
 **Measured (2026-10-27):** Muse Spark 1.3 got 118 of 120 right, Muse Spark Open 117 of 120,

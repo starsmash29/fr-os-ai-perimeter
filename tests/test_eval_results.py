@@ -23,7 +23,8 @@ RESULTS = EVAL / "results.json"
 REPORT = EVAL / "report.html"
 
 ROW_KEYS = {"case", "model", "status", "verdict", "seconds", "attempted_unsafe",
-            "accepted_unsafe", "operations", "cautions", "run", "error"}
+            "accepted_unsafe", "operations", "cautions", "run", "error", "refused_by",
+            "refused_field"}
 
 
 def data() -> dict:
@@ -43,8 +44,9 @@ def test_the_results_hold_no_answer_key_or_config():
     assert set(d) == {"generated", "models", "cases", "results"}
     for row in d["results"]:
         assert set(row) <= ROW_KEYS, set(row) - ROW_KEYS
-        if "error" in row:
-            assert row["error"].isidentifier()
+        for key in ("error", "refused_by", "refused_field"):
+            if key in row:
+                assert row[key].isidentifier(), (key, row[key])
     text = RESULTS.read_text(encoding="utf-8")
     for marker in ("api_key", "Bearer", ".config/fr_os", "/home/", "sk-"):
         assert marker not in text
