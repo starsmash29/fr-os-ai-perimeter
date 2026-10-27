@@ -141,10 +141,20 @@ def test_nothing_opens_the_router_to_the_internet(rule):
     dict(name="nas-open", action="accept", from_zone="wan", to_zone="lan"),
     dict(name="all-open", action="accept"),
     dict(name="udp-open", action="accept", from_zone="wan", to_zone="lan", proto="udp"),
+    # One port to one host is still an exposure to everyone (A5, d04/d05).
+    dict(name="nas-smb", action="accept", from_zone="wan", to_zone="lan", proto="tcp",
+         dst_port=445, dst_address="192.168.10.30/32"),
+    dict(name="game-server", action="accept", from_zone="wan", to_zone="lan", proto="udp",
+         dst_port="27015-27030"),
+    # A "source" that is the whole internet, or most of it.
+    dict(name="any4", action="accept", from_zone="wan", to_zone="lan", src_address="0.0.0.0/0"),
+    dict(name="any6", action="accept", from_zone="wan", to_zone="lan", src_address="::/0"),
+    dict(name="half", action="accept", from_zone="wan", to_zone="lan", proto="tcp", dst_port=22,
+         src_address=["198.51.100.0/24", "0.0.0.0/1"]),
 ])
-def test_nothing_opens_a_zone_to_the_internet_without_a_limit(rule):
+def test_nothing_opens_a_zone_to_the_whole_internet(rule):
     p = judge(add_rule(**rule))
-    assert p.status == pipeline.REFUSED and "a port or a source address" in p.problems[0]
+    assert p.status == pipeline.REFUSED and "needs a source address" in p.problems[0]
 
 
 def test_an_existing_rule_cant_be_widened_to_the_internet():
@@ -153,9 +163,15 @@ def test_an_existing_rule_cant_be_widened_to_the_internet():
     assert p.status == pipeline.REFUSED and "ssh-from-lan" in p.problems[0]
 
 
-def test_a_limited_rule_from_the_internet_is_left_to_the_admin():
+@pytest.mark.parametrize("limit", [
+    dict(src_address="198.51.100.0/24"),
+    dict(src_address=["198.51.100.0/24", "2001:db8:5::/48"]),
+    dict(src_address="10.0.0.0/8"),
+    dict(require_ztna=True),
+])
+def test_a_rule_from_a_named_source_is_left_to_the_admin(limit):
     p = judge(add_rule(name="game-server", action="accept", from_zone="wan", to_zone="lan",
-                       proto="udp", dst_port="27015-27030"))
+                       proto="udp", dst_port="27015-27030", **limit))
     assert p.problems == [] and p.status != pipeline.REFUSED
 
 

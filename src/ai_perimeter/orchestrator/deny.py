@@ -16,9 +16,14 @@ summary and dangerous in its fields is judged by its fields.
   F2, G4). The internet is every zone FR_OS itself calls
   internet-facing (``frfw.config.loader.internet_facing_zones``), and a
   rule with no from_zone, which matches them too.
-- **No accept rule from the internet without a port or a source address**
-  (unless it requires a ZTNA sign-in): FR_OS's rule linter only warns about
-  this one (``open-from-internet``); a proposal is refused.
+- **No accept rule from the whole internet** (unless it requires a ZTNA
+  sign-in): a proposal may let in a named source -- a network of at least
+  /8 (IPv4) or /16 (IPv6) -- but never everyone, not even on a single
+  port. A port or a host behind it is still an exposure an admin should
+  choose in FR_OS's Rules screen, not take from a model (A5 measures this:
+  ``ai_perimeter.eval``). ``0.0.0.0/0`` or ``::/0`` as the "source" is the
+  whole internet and is judged so. FR_OS's rule linter only warns about the
+  widest case (``open-from-internet``); a proposal is refused.
 
 Both rule checks apply to rules the patch adds or changes; a rule that was
 already in the config is the admin's, and the linter reports on it.
@@ -26,6 +31,7 @@ already in the config is the admin's, and the linter reports on it.
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
 
 from frfw.config import Action, Config
@@ -56,11 +62,23 @@ def refusals(before_raw: dict[str, Any], after_raw: dict[str, Any],
         if rule.to_zone == SELF_ZONE:
             reasons.append(f"rule {rule.name!r} would open the router itself to {origin}; "
                            "remote management is set in FR_OS's management settings, not by a rule")
-        elif rule.dst_port is None and rule.src_address is None and not rule.require_ztna:
+        elif not rule.require_ztna and not _named_source(rule.src_address):
             where = f"the {rule.to_zone} zone" if rule.to_zone else "every zone"
-            reasons.append(f"rule {rule.name!r} would open all of {where} to {origin}; "
-                           "a rule from the internet needs a port or a source address")
+            what = f"port {rule.dst_port} of {where}" if rule.dst_port else f"all of {where}"
+            reasons.append(f"rule {rule.name!r} would open {what} to {origin}; "
+                           "a rule from the internet needs a source address (at least /8, or /16 "
+                           "for IPv6) or a ZTNA sign-in, or the admin adds it on the Rules screen")
     return reasons
+
+
+#: The widest source that still names someone, not "the internet".
+_MIN_PREFIX = {4: 8, 6: 16}
+
+
+def _named_source(networks: tuple[str, ...] | None) -> bool:
+    return bool(networks) and all(
+        ipaddress.ip_network(n).prefixlen >= _MIN_PREFIX[ipaddress.ip_network(n).version]
+        for n in networks)
 
 
 def _changed_outside(before: dict[str, Any], after: dict[str, Any]) -> list[str]:

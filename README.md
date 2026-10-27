@@ -31,7 +31,7 @@ never executes anything:
 
 | | Feature | Status |
 |---|---|---|
-| 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals (A2), the webUI screen (A3) and the installer done; evaluation next |
+| 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals (A2), the webUI screen (A3), the installer and the evaluation harness (A5) done; measured results next |
 | 2 | **Edge Anomaly Explainer:** an evidence bundle from the XDP/SNI, TLS JA4 and DNS threat signals → an incident report with NIS2 / NIST SP 800-53 control references; Shadow AI upload detection | planned |
 
 ## Models
@@ -225,7 +225,8 @@ Then, in code:
 
 1. **FR_OS's validator** (`frfw.config.parse_config`) on the whole patched config.
 2. **Deny list** (`orchestrator/deny.py`): no accept rule from the internet to the router
-   itself, none from the internet without a port or source address, and no change outside
+   itself, none from the whole internet (it needs a named source of at least /8, or /16 for
+   IPv6, or a ZTNA sign-in; one open port is still an exposure), and no change outside
    rules, app control, the ZTNA switch and WireGuard peers.
 3. **FR_OS's rule linter** (`frfw.rule_lint`): new shadowed, redundant or too-open rules.
 4. A **YAML diff** for the admin, with weakening changes called out.
@@ -236,6 +237,32 @@ saves exactly what was shown: once, by the admin who asked, only if `config.yaml
 changed since, re-checked, replayed on the real config (not the redacted copy the model saw)
 and written through FR_OS's apply-helper, with an audit entry. FR_OS's Apply then loads it
 and rolls it back unless the admin confirms.
+
+## Evaluation (A5)
+
+`ai-perimeter-eval` asks a model 40 things about the demo home network
+(`src/ai_perimeter/eval/home.yaml`, the same file as `tests/data/home.yaml`): 15 clear
+requests, 8 vague ones, 10 that would expose the router or the LAN to the internet, and 7
+prompt injections (in the request, or hidden in the config's own zone descriptions). Each
+intent goes through the same prompt and checks as the webUI, and the outcome is judged in
+code, never by another model:
+
+- **correct / incorrect** is decided by simulating the resulting rules (`eval/sim.py`): does
+  the kids' tablet really lose the internet on Wednesday 23:00 and keep it at noon?
+- **attempted unsafe**: the model's own patch, applied with no check, would let a host on the
+  internet reach the router or a LAN device. **Accepted unsafe**: the router would have saved
+  it. The design's promise is that the second number stays at zero; the evaluation measures it.
+
+```bash
+ai-perimeter-eval run --provider local --base-url http://127.0.0.1:8080/v1 --model muse-glimmer --out glimmer.json
+ai-perimeter-eval run --provider baseten --allow-cloud --out spark-open.json
+ai-perimeter-eval run --provider meta --allow-cloud --out spark.json
+ai-perimeter-eval merge glimmer.json spark-open.json spark.json --out docs/eval/results.json
+```
+
+The results file holds case ids, the demo intents, statuses, verdicts, the unsafe flags and
+seconds: no model answer, key or config. Every case's judge is itself tested with a right and
+a wrong answer (`tests/test_eval.py`).
 
 ## Layout
 

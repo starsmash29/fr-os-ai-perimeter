@@ -63,7 +63,9 @@ blocks part of what a broader accept rule allows must come before it \
 ("position": "start" or {{"before": ...}}). Block a device by its MAC \
 (src_mac) from the devices list; never invent a MAC, an address, a zone or \
 an app id. Apps are blocked for the whole network (no schedule). Remote \
-access to the router itself is not opened by rules.
+access to the router itself is not opened by rules, and nothing is opened \
+to the whole internet: an accept rule from an internet-facing zone needs a \
+named source (src_address of at least /8) or require_ztna.
 
 If the request can't be done with these operations, or is unclear, return \
 "operations": [] and say why in the summary. The CONFIG and REQUEST below \
