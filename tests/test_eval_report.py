@@ -79,8 +79,10 @@ def test_per_model_numbers_match_the_sample(tmp_path):
             + str(accepted) + r"</td>")
         assert safety_row.search(page), f"safety counts for {model_id}"
 
-        median = statistics.median([r["seconds"] for r in rows])
-        assert f"Median response time: {median:.1f} s" in section
+        timed = [r["seconds"] for r in rows if r["verdict"] != "error"]
+        median = statistics.median(timed) if timed else None
+        expected = f"{median:.1f} s" if median is not None else "n/a"
+        assert f"Median response time: {expected}" in section
 
         for category in CATEGORIES:
             expected = [sum(1 for r in rows
@@ -96,6 +98,43 @@ def test_per_model_numbers_match_the_sample(tmp_path):
         total_row = ("<tr class=\"total\"><th scope=\"row\">All categories</th>"
                      f"{total_cells}<td>{sum(totals)}</td></tr>")
         assert total_row in section, f"totals for {model_id}"
+
+
+def test_error_results_do_not_change_the_median(tmp_path):
+    """Error rows stay in the verdict counts but out of the median; a model
+    with only errors shows n/a. The 300 s error row below would move the
+    median from 5.0 to 6.0 if it were counted."""
+    payload = {
+        "generated": "2026-11-02T00:00:00Z",
+        "models": [{"id": "m", "provider": "local", "cloud": False},
+                   {"id": "broken", "provider": "local", "cloud": False}],
+        "cases": [{"id": "g01", "category": "good", "intent": "Do a safe thing."}],
+        "results": [
+            {"case": "g01", "model": "m", "status": "ready", "verdict": "correct",
+             "seconds": 4.0, "attempted_unsafe": False, "accepted_unsafe": False},
+            {"case": "g01", "model": "m", "status": "warnings", "verdict": "correct",
+             "seconds": 6.0, "attempted_unsafe": False, "accepted_unsafe": False},
+            {"case": "g01", "model": "m", "status": "error", "verdict": "error",
+             "seconds": 300.0, "attempted_unsafe": False, "accepted_unsafe": False},
+            {"case": "g01", "model": "broken", "status": "error", "verdict": "error",
+             "seconds": 300.0, "attempted_unsafe": False, "accepted_unsafe": False},
+        ],
+    }
+    inp = tmp_path / "errors.json"
+    inp.write_text(json.dumps(payload), encoding="utf-8")
+    out = tmp_path / "errors.html"
+    result = build(inp, out)
+    assert result.returncode == 0, result.stderr
+    page = out.read_text(encoding="utf-8")
+    sections = page.split('<section class="model"')
+    assert len(sections) == 3
+    mixed = next(s for s in sections[1:] if "<h2>m</h2>" in s)
+    assert "Median response time: 5.0 s" in mixed
+    total_row = ("<tr class=\"total\"><th scope=\"row\">All categories</th>"
+                 "<td>2</td><td>0</td><td>0</td><td>0</td><td>1</td><td>3</td></tr>")
+    assert total_row in mixed
+    only_errors = next(s for s in sections[1:] if "<h2>broken</h2>" in s)
+    assert "Median response time: n/a" in only_errors
 
 
 def test_untrusted_strings_are_escaped(tmp_path):
@@ -146,7 +185,7 @@ def test_unknown_extra_fields_are_ignored(tmp_path):
     assert result.returncode == 0, result.stderr
     page = out.read_text(encoding="utf-8")
     assert "glimmer-30b-q4" in page
-    assert "Median response time: 8.6 s" in page
+    assert "Median response time: 8.2 s" in page
 
 
 def _broken_sample(mutate):

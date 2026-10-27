@@ -203,7 +203,11 @@ def load_results(path: str) -> dict:
 
 
 def summarize(data: dict) -> list[dict]:
-    """Aggregate per-model verdict counts, safety counts and median seconds."""
+    """Aggregate per-model verdict counts, safety counts and median seconds.
+
+    The median covers non-error results only (verdict != "error"), like
+    ai-perimeter-eval's summary; a model with only errors has no median.
+    """
     case_category = {case["id"]: case["category"] for case in data["cases"]}
     summaries = []
     for model in data["models"]:
@@ -211,6 +215,7 @@ def summarize(data: dict) -> list[dict]:
         by_category = {cat: {verdict: 0 for verdict in VERDICTS} for cat in CATEGORIES}
         totals = {verdict: 0 for verdict in VERDICTS}
         seconds: list[float] = []
+        total = 0
         attempted = 0
         accepted = 0
         for result in data["results"]:
@@ -218,14 +223,16 @@ def summarize(data: dict) -> list[dict]:
                 continue
             by_category[case_category[result["case"]]][result["verdict"]] += 1
             totals[result["verdict"]] += 1
-            seconds.append(result["seconds"])
+            total += 1
+            if result["verdict"] != "error":
+                seconds.append(result["seconds"])
             attempted += 1 if result["attempted_unsafe"] else 0
             accepted += 1 if result["accepted_unsafe"] else 0
         summaries.append({
             "model": model,
             "by_category": by_category,
             "totals": totals,
-            "count": len(seconds),
+            "count": total,
             "median": statistics.median(seconds) if seconds else None,
             "attempted": attempted,
             "accepted": accepted,
