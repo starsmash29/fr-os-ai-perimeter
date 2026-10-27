@@ -57,6 +57,33 @@ ai-perimeter-chat --provider baseten --allow-cloud "Hello"
 ai-perimeter-chat --provider meta --allow-cloud "Hello"
 ```
 
+## Install on an FR_OS router
+
+```bash
+installer/make-bundle.sh            # on a build machine: dist/fr-os-ai-perimeter-<version>.tar.gz
+# copy the .tar.gz (and its .sha256) to the router, then:
+sha256sum -c fr-os-ai-perimeter-*.tar.gz.sha256
+tar -xzf fr-os-ai-perimeter-*.tar.gz && cd fr-os-ai-perimeter-*/
+sudo ./install.sh                   # --uninstall removes it, --purge also its settings and key
+```
+
+`install.sh` downloads nothing and installs no dependency. It checks that the bundle is whole and
+that the machine is FR_OS, installs the package and the units, creates
+`/etc/fr_os/ai-perimeter.yaml` (`enabled: false`) and an empty key file
+`/etc/fr_os/ai-perimeter/api_key` (root, 0600) if they don't exist, and never overwrites them.
+It then checks that only the webUI's account can reach `fr-ai-assist` and that the webUI came back.
+The AI-Perimeter entry appears in the sidebar; it stays off until `enabled: true`.
+
+**FR_OS itself is not changed.** The webUI gets the screen from `fr-webui-ai`, which runs FR_OS's
+own `fr-webui` code and adds the screen in memory; a systemd drop-in starts it in place of
+`fr-webui`, under FR_OS's own account and sandbox. FR_OS's integrity check (which compares its
+installed files with the signed release) therefore stays clean. On a live USB system, FR_OS's
+persistence check does list the added files (the package, the units, the drop-in), as it should:
+they are not part of FR_OS. The `install` CI job runs all of this on a real systemd.
+
+The SHA256 sums show that the bundle arrived whole. They are not a signature: compare the
+`.sha256` with the one on the release page.
+
 ## Configure
 
 The service reads `/etc/fr_os/ai-perimeter.yaml`, separately from the router's
@@ -136,8 +163,8 @@ The checked-in [service unit](systemd/fr-ai-assist.service) uses
 root-owned, mode `0600`; systemd supplies a private copy to the service. A
 nonempty `$CREDENTIALS_DIRECTORY/api_key` takes precedence over
 `api_key_file`. The unit expects its credential source to exist even for a
-keyless local model; an empty file means no credential. See the installer
-placeholder below before deploying this unit.
+keyless local model; an empty file means no credential. `install.sh` creates
+it empty (root, 0600) and never overwrites it.
 
 For a development run outside systemd, add **only a file path** to the chosen
 cloud settings file:
@@ -152,10 +179,6 @@ provider defaults outside systemd. Once the private key file exists, enforce its
 permissions on Linux with `chmod 600 /path/to/key-file`. The file must belong to
 the service or development account reading it; an operator's home-directory key
 is not the credential source for the sandboxed systemd service.
-
-## Install
-
-TODO(claude): installer
 
 ## What you see
 
@@ -224,33 +247,6 @@ systemd/              fr-ai-assist's units and the drop-in for FR_OS's webUI
 tests/                tests (real local HTTP servers, not mocks)
 docs/brand/           logo files
 ```
-
-## Install on an FR_OS router
-
-```bash
-installer/make-bundle.sh            # on a build machine: dist/fr-os-ai-perimeter-<version>.tar.gz
-# copy the .tar.gz (and its .sha256) to the router, then:
-sha256sum -c fr-os-ai-perimeter-*.tar.gz.sha256
-tar -xzf fr-os-ai-perimeter-*.tar.gz && cd fr-os-ai-perimeter-*/
-sudo ./install.sh                   # --uninstall removes it, --purge also its settings and key
-```
-
-`install.sh` downloads nothing and installs no dependency. It checks that the bundle is whole and
-that the machine is FR_OS, installs the package and the units, creates
-`/etc/fr_os/ai-perimeter.yaml` (`enabled: false`) and an empty key file
-`/etc/fr_os/ai-perimeter/api_key` (root, 0600) if they don't exist, and never overwrites them.
-It then checks that only the webUI's account can reach `fr-ai-assist` and that the webUI came back.
-The AI-Perimeter entry appears in the sidebar; it stays off until `enabled: true`.
-
-**FR_OS itself is not changed.** The webUI gets the screen from `fr-webui-ai`, which runs FR_OS's
-own `fr-webui` code and adds the screen in memory; a systemd drop-in starts it in place of
-`fr-webui`, under FR_OS's own account and sandbox. FR_OS's integrity check (which compares its
-installed files with the signed release) therefore stays clean. On a live USB system, FR_OS's
-persistence check does list the added files (the package, the units, the drop-in), as it should:
-they are not part of FR_OS. The `install` CI job runs all of this on a real systemd.
-
-The SHA256 sums show that the bundle arrived whole. They are not a signature: compare the
-`.sha256` with the one on the release page.
 
 ## Development
 
