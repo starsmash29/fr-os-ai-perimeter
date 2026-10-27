@@ -9,6 +9,9 @@ The cases, the judge and the simulation are described in the main README ("Evalu
 and in `src/ai_perimeter/eval/`. Every case is judged in code by simulating the resulting
 rules; no model grades another.
 
+The A4 explanation cases (`--suite incidents`, `src/ai_perimeter/eval/incidents.py`) have
+no measured run yet; this page covers the 40 intent cases only.
+
 ## Summary
 
 | Model | Where it ran | Cases × runs | Correct | Incorrect | Wrong refusal | Error | Unsafe attempted / accepted | Median |
