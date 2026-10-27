@@ -16,6 +16,9 @@ dependencies = [
     "frfw @ git+https://github.com/starsmash29/fr_os-hackathon@815576493ca8c6512244bae9b482d6923c575650",
 ]
 
+[project.scripts]
+ai-perimeter-chat = "ai_perimeter.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
