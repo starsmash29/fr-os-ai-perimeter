@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+# API keys live outside the repository (~/.config/fr_os/), never here.
+*.key
+.env
