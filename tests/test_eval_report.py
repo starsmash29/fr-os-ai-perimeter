@@ -239,3 +239,52 @@ def test_the_committed_page_matches_a_fresh_sample_build(tmp_path):
     result = build(SAMPLE, out, "--sample")
     assert result.returncode == 0, result.stderr
     assert out.read_text(encoding="utf-8") == INDEX.read_text(encoding="utf-8")
+
+
+def test_partial_coverage_shows_sample_note(tmp_path):
+    """A model covering fewer cases than listed shows "Sample: N of M cases"
+    in its own section and in the safety summary; a full model shows neither.
+    Coverage is distinct cases, so the repeated g01 row still leaves 2 of 3."""
+    payload = {
+        "generated": "2026-11-02T00:00:00Z",
+        "models": [{"id": "full", "provider": "local", "cloud": False},
+                   {"id": "part", "provider": "local", "cloud": False}],
+        "cases": [{"id": "g01", "category": "good", "intent": "First."},
+                  {"id": "g02", "category": "good", "intent": "Second."},
+                  {"id": "g03", "category": "good", "intent": "Third."}],
+        "results": [
+            {"case": "g01", "model": "full", "status": "ready", "verdict": "correct",
+             "seconds": 1.0, "attempted_unsafe": False, "accepted_unsafe": False},
+            {"case": "g02", "model": "full", "status": "ready", "verdict": "correct",
+             "seconds": 1.0, "attempted_unsafe": False, "accepted_unsafe": False},
+            {"case": "g03", "model": "full", "status": "ready", "verdict": "correct",
+             "seconds": 1.0, "attempted_unsafe": False, "accepted_unsafe": False},
+            {"case": "g01", "model": "part", "status": "ready", "verdict": "correct",
+             "seconds": 1.0, "attempted_unsafe": False, "accepted_unsafe": False},
+            {"case": "g01", "model": "part", "status": "ready", "verdict": "correct",
+             "seconds": 2.0, "attempted_unsafe": False, "accepted_unsafe": False},
+            {"case": "g02", "model": "part", "status": "ready", "verdict": "correct",
+             "seconds": 1.5, "attempted_unsafe": False, "accepted_unsafe": False},
+        ],
+    }
+    inp = tmp_path / "partial.json"
+    inp.write_text(json.dumps(payload), encoding="utf-8")
+    out = tmp_path / "partial.html"
+    result = build(inp, out)
+    assert result.returncode == 0, result.stderr
+    page = out.read_text(encoding="utf-8")
+
+    sections = page.split('<section class="model"')
+    assert len(sections) == 3
+    full_section = next(s for s in sections[1:] if "<h2>full</h2>" in s)
+    part_section = next(s for s in sections[1:] if "<h2>part</h2>" in s)
+    assert "Sample: 2 of 3 cases" in part_section
+    assert "Sample:" not in full_section
+
+    safety = page.split('<table class="safety">')[1].split("</table>")[0]
+    assert "Sample: 2 of 3 cases" in safety
+    full_row = re.search(r'<tr><th scope="row">full</th>.*?</tr>', safety, re.DOTALL)
+    part_row = re.search(r'<tr><th scope="row">part</th>.*?</tr>', safety, re.DOTALL)
+    assert full_row and part_row
+    assert "Sample:" not in full_row.group(0)
+    assert "Sample: 2 of 3 cases" in part_row.group(0)
