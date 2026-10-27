@@ -7,6 +7,7 @@ Examples::
     ai-perimeter-eval run --provider baseten --allow-cloud --out spark-open.json
     ai-perimeter-eval run --provider meta --allow-cloud --out spark.json
     ai-perimeter-eval merge glimmer.json spark-open.json spark.json --out results.json
+    ai-perimeter-eval run --suite incidents --provider local ... --out glimmer-incidents.json
 
 Each intent goes through ``pipeline.propose`` with the same prompt, token
 budget and checks as the AI-Perimeter service, so the numbers describe
@@ -18,6 +19,13 @@ intents, statuses, verdicts, the two unsafe flags and seconds. A refused
 proposal adds which step refused it and, for FR_OS's validator, the name
 of the config field it objected to -- never the value, which is the
 model's.
+
+``--suite incidents`` runs the A4 explanation cases instead
+(:mod:`.incidents`): five pseudonymised evidence bundles through the
+service's explanation loop. Its results file says ``"suite": "incidents"``
+and holds the verdict, the final severity and whether the router had to
+raise it, never the explanation's text. Files of the two suites are not
+merged.
 
 If nothing answers at the provider's address on the first case, the run
 stops there instead of writing a file of instant errors (a llama-server
@@ -39,7 +47,10 @@ from typing import Any, Callable
 from ..client import ChatClient, ConfigError, ProviderError, ProviderSettings, Unreachable
 from ..orchestrator import pipeline
 from ..service import PROPOSE_MAX_TOKENS
+from . import incidents
 from .cases import CASES, CATEGORIES, VERDICTS, Case, judge
+
+SUITES = {"intents": (CASES, CATEGORIES), "incidents": (incidents.CASES, incidents.CATEGORIES)}
 
 Ask = Callable[[list[dict[str, str]]], tuple[str, str]]
 
@@ -88,12 +99,13 @@ def run_case(case: Case, ask: Ask, model_id: str) -> dict[str, Any]:
     return row
 
 
-def run(ask: Ask, model: dict[str, Any], *, cases: tuple[Case, ...] = CASES, repeat: int = 1,
+def run(ask: Ask, model: dict[str, Any], *, cases: tuple[Any, ...] = CASES, repeat: int = 1,
         progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+    explain = bool(cases) and isinstance(cases[0], incidents.Case)
     results = []
     for n in range(repeat):
         for case in cases:
-            row = run_case(case, ask, model["id"])
+            row = (incidents.run_case if explain else run_case)(case, ask, model["id"])
             if not results and row.get("error") == Unreachable.__name__:
                 raise NoProvider(f"nothing answers at the provider's address ({model['id']}); "
                                  "is the model server running?")
@@ -102,11 +114,17 @@ def run(ask: Ask, model: dict[str, Any], *, cases: tuple[Case, ...] = CASES, rep
             results.append(row)
             if progress:
                 progress(row)
+    if explain:
+        return {"generated": _now(), "suite": "incidents", "models": [model],
+                "cases": incidents.case_rows(cases), "results": results}
     return {"generated": _now(), "models": [model], "cases": _cases(cases), "results": results}
 
 
 def merge(files: list[dict[str, Any]]) -> dict[str, Any]:
     models, cases, results, ids = [], {}, [], set()
+    suites = {data.get("suite", "intents") for data in files}
+    if len(suites) > 1:
+        raise ValueError("the files are of different suites (intents and incidents)")
     for data in files:
         for model in data["models"]:
             if model["id"] in ids:
@@ -117,18 +135,27 @@ def merge(files: list[dict[str, Any]]) -> dict[str, Any]:
             if cases.setdefault(case["id"], case) != case:
                 raise ValueError(f"case {case['id']!r} differs between files")
         results += data["results"]
-    return {"generated": _now(), "models": models, "cases": list(cases.values()), "results": results}
+    suite = {"suite": "incidents"} if suites == {"incidents"} else {}
+    return {"generated": _now(), **suite, "models": models, "cases": list(cases.values()),
+            "results": results}
 
 
 def summary(data: dict[str, Any]) -> str:
     lines = []
+    explain = data.get("suite") == "incidents"
     for model in data["models"]:
         rows = [r for r in data["results"] if r["model"] == model["id"]]
+        seconds = [r["seconds"] for r in rows if r["verdict"] != "error"]
+        median = round(statistics.median(seconds), 2) if seconds else 0
+        if explain:
+            counts = {v: sum(r["verdict"] == v for r in rows) for v in incidents.VERDICTS}
+            raised = sum(bool(r.get("severity_raised")) for r in rows)
+            lines.append(f"{model['id']}: " + ", ".join(f"{v} {n}" for v, n in counts.items())
+                         + f"; severity raised by the router {raised}; median {median:g} s")
+            continue
         counts = {v: sum(r["verdict"] == v for r in rows) for v in VERDICTS}
         attempted = sum(r["attempted_unsafe"] for r in rows)
         accepted = sum(r["accepted_unsafe"] for r in rows)
-        seconds = [r["seconds"] for r in rows if r["verdict"] != "error"]
-        median = round(statistics.median(seconds), 2) if seconds else 0
         lines.append(f"{model['id']}: " + ", ".join(f"{v} {n}" for v, n in counts.items())
                      + f"; unsafe attempted {attempted}, accepted {accepted}; median {median:g} s")
     return "\n".join(lines)
@@ -154,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--allow-cloud", action="store_true")
     r.add_argument("--timeout", type=float, default=300.0)
     r.add_argument("--repeat", type=int, default=1)
+    r.add_argument("--suite", choices=sorted(SUITES), default="intents")
     r.add_argument("--only", help="comma-separated case ids or categories")
     r.add_argument("--out", required=True)
     m = sub.add_parser("merge", help="merge result files, one per model")
@@ -171,12 +199,12 @@ def main(argv: list[str] | None = None) -> int:
         print(summary(data))
         return 0
 
-    cases = CASES
+    cases, categories = SUITES[args.suite]
     if args.only:
         wanted = set(args.only.split(","))
-        cases = tuple(c for c in CASES if c.id in wanted or c.category in wanted)
+        cases = tuple(c for c in cases if c.id in wanted or c.category in wanted)
         if not cases:
-            print(f"error: no case matches {args.only!r} ({', '.join(CATEGORIES)})", file=sys.stderr)
+            print(f"error: no case matches {args.only!r} ({', '.join(categories)})", file=sys.stderr)
             return 2
     if not 1 <= args.repeat <= 10:
         print("error: --repeat must be 1-10", file=sys.stderr)
@@ -193,9 +221,9 @@ def main(argv: list[str] | None = None) -> int:
     model = {"id": settings.model, "provider": settings.name, "cloud": settings.cloud}
 
     def progress(row):
-        flag = " UNSAFE ACCEPTED" if row["accepted_unsafe"] else (
-            " (unsafe attempt refused)" if row["attempted_unsafe"] else "")
-        why = " ".join(row[k] for k in ("refused_by", "refused_field") if k in row)
+        flag = " UNSAFE ACCEPTED" if row.get("accepted_unsafe") else (
+            " (unsafe attempt refused)" if row.get("attempted_unsafe") else "")
+        why = " ".join(row[k] for k in ("refused_by", "refused_field", "missed") if k in row)
         why = f" [{why}]" if why else ""
         print(f"{row['case']}: {row['status']:9} {row['verdict']:15} {row['seconds']:7.1f} s"
               f"{flag}{why}", file=sys.stderr, flush=True)

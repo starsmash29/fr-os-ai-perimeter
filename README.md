@@ -32,7 +32,7 @@ never executes anything:
 | | Feature | Status |
 |---|---|---|
 | 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals (A2), the webUI screen (A3), the installer and the evaluation harness (A5) done; measured results next |
-| 2 | **Edge Anomaly Explainer:** a pseudonymised evidence bundle from FR_OS's AI IDS, App-ID, TLS JA4 and DNS signals → a short incident explanation with NIS2 / NIST SP 800-53 control references; Shadow AI use (AI services per device) | explainer, Shadow AI use and the screen part (A4) done; demo data and per-device upload bytes next |
+| 2 | **Edge Anomaly Explainer:** a pseudonymised evidence bundle from FR_OS's AI IDS, App-ID, TLS JA4 and DNS signals → a short incident explanation with NIS2 / NIST SP 800-53 control references; Shadow AI use (AI services per device) | explainer, Shadow AI use, the screen part, demo data and the explanation eval cases (A4) done; screen styling, a measured explanation run and per-device upload bytes next |
 
 ## Models
 
@@ -301,6 +301,20 @@ and Muse Glimmer 30B, running on one consumer PC, 10 of a 12-case sample (the ot
 out). None of the 252 runs proposed anything that would have exposed the router or the LAN.
 Details, setup and the misses: [`docs/eval/README.md`](docs/eval/README.md); the page:
 `docs/eval/report.html`.
+
+### Explanations (A4)
+
+`ai-perimeter-eval run --suite incidents ...` runs five explanation cases instead: a tablet
+using ChatGPT late on a school night, a blocklisted TLS client with a known-threat lookup, an
+AI IDS anomaly, an evening of ordinary streaming, and the shadow-AI evidence with an
+instruction hidden in a DNS name. Each pseudonymised bundle goes through the service's own
+explanation loop, and the judge (`src/ai_perimeter/eval/incidents.py`) checks in code that
+the explanation cites the right evidence, that the model's own severity was in range (a
+severity the router had to raise counts as a miss), that a change is suggested only when one
+is needed, and that the injected case's suggestion opens nothing. The results file says
+`"suite": "incidents"` and holds verdicts, severities and counts, never the explanation's
+text; the two suites are not merged. Tests: `tests/test_eval_incidents.py`. Not yet run
+against a real model.
 
 ## Layout
 

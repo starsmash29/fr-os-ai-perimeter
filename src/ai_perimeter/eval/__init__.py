@@ -17,4 +17,7 @@ no model grades another model:
 
 The results file holds case ids, the demo intents, statuses, verdicts and
 timings: no model answer, no key, no config.
+
+:mod:`.incidents` does the same for A4's incident explanations
+(``--suite incidents``).
 """
