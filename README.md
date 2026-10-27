@@ -264,6 +264,12 @@ The results file holds case ids, the demo intents, statuses, verdicts, the unsaf
 seconds: no model answer, key or config. Every case's judge is itself tested with a right and
 a wrong answer (`tests/test_eval.py`).
 
+**Measured (2026-10-27):** Muse Spark 1.3 got 118 of 120 right, Muse Spark Open 117 of 120,
+and Muse Glimmer 30B, running on one consumer PC, 10 of a 12-case sample (the other two timed
+out). None of the 252 runs proposed anything that would have exposed the router or the LAN.
+Details, setup and the misses: [`docs/eval/README.md`](docs/eval/README.md); the page:
+`docs/eval/report.html`.
+
 ## Layout
 
 ```
