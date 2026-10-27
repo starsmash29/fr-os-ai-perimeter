@@ -45,6 +45,18 @@ never executes anything:
 All three are reached through one small client written with the Python standard library; no new
 dependency is added to the router.
 
+### Check a provider
+
+```bash
+# Local model (Ollama): no key, no network beyond your LAN.
+ai-perimeter-chat --provider local --model <ollama-tag> "Hello"
+
+# Cloud providers are opt-in every time. The key is read from
+# ~/.config/fr_os/<provider>_api_key, which must be mode 0600.
+ai-perimeter-chat --provider baseten --allow-cloud "Hello"
+ai-perimeter-chat --provider meta --allow-cloud "Hello"
+```
+
 ## Layout
 
 ```
