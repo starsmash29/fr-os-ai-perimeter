@@ -21,6 +21,13 @@ Why it is built this way (FR_OS security-lessons A1, G3, G9):
   ``require_login`` refuses to a viewer. A viewer sees the status only.
 - **Audited.** A saved proposal is an audit entry naming the operations,
   besides FR_OS's own line for the request (security-lessons G9).
+
+The "What did the router see?" part (A4) lists the devices FR_OS's sensors
+flagged and, on an admin's request, has the model explain one of them. The
+evidence is built here, pseudonymised (``incident.evidence``); the device's
+name goes back into the explanation only in this process, and the
+suggested change is put into the request box above, where it takes the
+same path as anything the admin types.
 """
 
 from __future__ import annotations
@@ -46,6 +53,7 @@ from frfw.webui.responses import redirect_with
 from frfw.webui.templating import templates
 
 from ..assist_client import AssistError, ask
+from ..incident import evidence
 from ..orchestrator import pipeline
 from ..orchestrator.ops import Patch, PatchError, apply_patch, patch_from_dict
 from ..orchestrator.prompt import MAX_INTENT
@@ -193,10 +201,68 @@ def _describe(op: dict[str, Any]) -> str:
     return f"{kind.replace('_', ' ')} {op['name']}"
 
 
-def _page(request: Request, username: str, **context: Any):
+def _labels(raw: dict[str, Any]) -> dict[str, str]:
+    """Device names from the config's DHCP reservations, by MAC and address."""
+    labels: dict[str, str] = {}
+    dhcp = raw.get("dhcp") if isinstance(raw, dict) else None
+    for zone in (dhcp or {}).values() if isinstance(dhcp, dict) else ():
+        for r in zone.get("reservations") or [] if isinstance(zone, dict) else ():
+            if isinstance(r, dict) and isinstance(r.get("hostname"), str):
+                for key in (r.get("mac"), r.get("address")):
+                    if isinstance(key, str):
+                        labels[key.lower()] = r["hostname"]
+    return labels
+
+
+def _suspects(request: Request, raw: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        rows = evidence.suspects(request.app.state.ai_perimeter_sources, labels=_labels(raw))
+    except (OSError, ValueError):
+        return []
+    for row in rows:
+        row["last_seen"] = time.strftime("%a %H:%M", time.localtime(row["last_seen"])) \
+            if row["last_seen"] else ""
+    return rows
+
+
+def _named(text: str, names: dict[str, str]) -> str:
+    for label, name in names.items():
+        text = text.replace(label, name)
+    return text
+
+
+def _explanation(result: dict[str, Any], bundle: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
+    """The service's answer, re-read: only known fields, as text, with the
+    device's name put back."""
+    status = result.get("status")
+    if status not in ("ready", "refused"):
+        raise AssistError("the AI-Perimeter service's answer was malformed")
+    items = {item["id"]: item for section in bundle["sections"].values() for item in section}
+    cited = [i for i in _strings(result.get("evidence")) if i in items]
+    severity = result.get("severity")
+    return {
+        "status": status,
+        "title": _named(str(result.get("title") or ""), names),
+        "severity": severity if severity in ("low", "medium", "high") else "",
+        "severity_raised": result.get("severity_raised") is True,
+        "summary": _named(str(result.get("summary") or ""), names),
+        "evidence": [{"id": i, "item": {k: v for k, v in items[i].items() if k != "id"}} for i in cited],
+        "suggested_intent": _named(str(result.get("suggested_intent") or ""), names)[:MAX_INTENT],
+        "controls": _strings(result.get("controls"), 10),
+        "nis2_note": str(result.get("nis2_note") or ""),
+        "steps": _strings(result.get("steps"), 10),
+        "problems": _strings(result.get("problems"), 10),
+        "reasoning": str(result.get("reasoning") or ""),
+        "device": next(iter(names.values()), ""),
+    }
+
+
+def _page(request: Request, username: str, raw: dict[str, Any], **context: Any):
     return templates.TemplateResponse(request, "ai_perimeter.html", {
         "username": username,
         "status": _status(request),
+        "suspects": _suspects(request, raw),
+        "explanation": None,
         "max_intent": MAX_INTENT,
         "intent": "",
         "proposal": None,
@@ -208,8 +274,9 @@ def _page(request: Request, username: str, **context: Any):
 
 
 @router.get(PAGE)
-def show(request: Request, username: str = Depends(require_login)):
-    return _page(request, username)
+def show(request: Request, username: str = Depends(require_login),
+         raw: dict = Depends(get_raw_config)):
+    return _page(request, username, raw)
 
 
 @router.post(PAGE + "/propose")
@@ -225,14 +292,36 @@ def propose(
                      socket_path=path, timeout=timeout)
         view, patch = _view(result)
     except AssistError as exc:
-        return _page(request, username, intent=intent, error=f"No proposal: {exc}")
+        return _page(request, username, raw, intent=intent, error=f"No proposal: {exc}")
     except PatchError as exc:
-        return _page(request, username, intent=intent,
+        return _page(request, username, raw, intent=intent,
                      error=f"No proposal: the AI-Perimeter service's answer was malformed ({exc})")
     proposal_id = None
     if view["status"] in _SAVABLE:
         proposal_id = request.app.state.ai_perimeter_proposals.put(patch, username, config_digest(raw))
-    return _page(request, username, intent=intent, proposal=view, proposal_id=proposal_id)
+    return _page(request, username, raw, intent=intent, proposal=view, proposal_id=proposal_id)
+
+
+@router.post(PAGE + "/explain")
+def explain_device(
+    request: Request,
+    ip: str = Form(""),
+    username: str = Depends(require_login),
+    raw: dict = Depends(get_raw_config),
+):
+    try:
+        bundle, names = evidence.build_bundle(ip, request.app.state.ai_perimeter_sources,
+                                              labels=_labels(raw))
+    except LookupError as exc:
+        return _page(request, username, raw, error=f"No explanation: {exc}")
+    path, timeout = _socket(request)
+    try:
+        result = ask("explain_incident", {"bundle": bundle}, socket_path=path, timeout=timeout)
+        view = _explanation(result, bundle, names)
+    except AssistError as exc:
+        return _page(request, username, raw, error=f"No explanation: {exc}")
+    return _page(request, username, raw, explanation=view,
+                 intent=view["suggested_intent"] if view["status"] == "ready" else "")
 
 
 @router.post(PAGE + "/save")

@@ -187,7 +187,11 @@ units and the drop-in, and the `install` CI job runs it on a real systemd
 next to FR_OS's real `fr-webui.service`. Saving and FR_OS's Apply with
 commit-confirm on a full FR_OS router are exercised in the demo environment,
 not in CI.
-The README still marks the anomaly explainer and Shadow AI as planned; they
-are not part of the implemented proposal path shown above.
+The anomaly explainer (A4) uses the same service with a second task,
+`explain_incident`: the webUI builds a pseudonymised evidence bundle from
+FR_OS's sensor files, which `fr-webui` may already read (`/etc/fr_os/sensors`,
+and the resolver's query log through the `fr_os-feeds` group), and the model
+answers in a bounded read-only loop over that bundle. See the README's
+"What did the router see?".
 
 Use only [`tests/data/home.yaml`](../tests/data/home.yaml) for demonstrations.

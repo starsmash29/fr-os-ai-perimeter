@@ -47,6 +47,8 @@ class FakeProvider:
         self.body: bytes | dict = _completion("hello")
         self.headers: dict[str, str] = {}
         self.delay = 0.0
+        #: Answers for the next requests, in order; then ``body`` again.
+        self.queue: list[bytes | dict] = []
         provider = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -62,7 +64,7 @@ class FakeProvider:
                 })
                 if provider.delay:
                     time.sleep(provider.delay)
-                body = provider.body
+                body = provider.queue.pop(0) if provider.queue else provider.body
                 if isinstance(body, dict):
                     body = json.dumps(body).encode()
                 try:

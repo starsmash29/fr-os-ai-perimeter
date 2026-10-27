@@ -25,6 +25,65 @@
   {% endif %}
 </div>
 
+
+<div class="card" id="router-saw">
+  <h3>What did the router see?</h3>
+  {% if suspects %}
+  <p class="muted">Devices FR_OS's sensors flagged in the last 24 hours. An explanation sends the model
+    this device's evidence under a pseudonym: no address, MAC or name.</p>
+  <table>
+    <thead><tr><th>Device</th><th>Why it is listed</th><th>AI services</th><th>Last seen</th><th></th></tr></thead>
+    <tbody>
+    {% for s in suspects %}
+    <tr>
+      <td>{{ s.name or s.ip }}{% if s.name %} <span class="muted">{{ s.ip }}</span>{% endif %}</td>
+      <td>{% for r in s.reasons %}<span class="badge {{ 'badge-red' if r == 'tls_blocklist' else 'badge-yellow' }}">{{ r | replace('_', ' ') }}</span> {% endfor %}</td>
+      <td>{{ s.ai_services | join(', ') }}</td>
+      <td>{{ s.last_seen }}</td>
+      <td>{% if can_change %}
+        <form method="post" action="/ai-perimeter/explain">
+          {{ csrf_input(request) }}
+          <input type="hidden" name="ip" value="{{ s.ip }}">
+          <button type="submit">Explain</button>
+        </form>{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Nothing flagged in the last 24 hours (AI IDS, App-ID AI services, TLS fingerprints).</p>
+  {% endif %}
+</div>
+
+{% if explanation %}
+<div class="card" id="explanation">
+  {% if explanation.status == "ready" %}
+  <h3>{{ explanation.title }}
+    <span class="badge {{ {'high': 'badge-red', 'medium': 'badge-yellow', 'low': 'badge-green'}[explanation.severity] }}">{{ explanation.severity }}</span>
+  </h3>
+  <p class="muted">{{ explanation.device }}</p>
+  <p>{{ explanation.summary }}</p>
+  {% if explanation.severity_raised %}<p class="muted">The severity was raised to what the evidence alone shows.</p>{% endif %}
+  <h4>Evidence</h4>
+  <ul>{% for e in explanation.evidence %}<li><code>{{ e.id }}</code> {{ e.item | tojson }}</li>{% endfor %}</ul>
+  <h4>Related controls</h4>
+  <p>{{ explanation.controls | join(' · ') }}</p>
+  {% if explanation.nis2_note %}<p><span class="badge badge-red">NIS2</span> {{ explanation.nis2_note }}</p>{% endif %}
+  {% if explanation.suggested_intent %}
+  <p>Suggested change, copied into the request box below: <em>{{ explanation.suggested_intent }}</em>. Nothing changes until you propose, review and save it.</p>
+  {% endif %}
+  {% else %}
+  <h3>No explanation <span class="badge badge-red">refused</span></h3>
+  <ul>{% for p in explanation.problems %}<li>{{ p }}</li>{% endfor %}</ul>
+  {% endif %}
+  <details>
+    <summary>How the model got there ({{ explanation.steps | length }} evidence requests)</summary>
+    <p>{% for s in explanation.steps %}<code>{{ s }}</code> {% endfor %}</p>
+    {% if explanation.reasoning %}<pre>{{ explanation.reasoning }}</pre>{% endif %}
+  </details>
+</div>
+{% endif %}
+
 {% if can_change %}
 <div class="card">
   <h3>What should change?</h3>

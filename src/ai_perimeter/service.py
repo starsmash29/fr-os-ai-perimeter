@@ -36,6 +36,7 @@ from frfw.helper.peer import peer_credentials
 
 from . import __version__
 from .client import ChatClient, ConfigError, ProviderError
+from .incident import explain as incident
 from .orchestrator import pipeline
 from .protocol import MAX_LINE_BYTES, ProtocolError, decode_request, encode
 from .settings import DEFAULT_PATH, Settings, load_settings
@@ -107,11 +108,35 @@ def _task_propose_patch(ctx: Context, args: dict[str, Any]) -> dict[str, Any]:
         raise TaskError(str(exc)) from None
 
 
+def _task_explain_incident(ctx: Context, args: dict[str, Any]) -> dict[str, Any]:
+    """A4: a pseudonymised evidence bundle in (the webUI builds it, see
+    incident.evidence), an explanation out. Read-only: the model can ask for
+    sections of the bundle and nothing else."""
+    unknown = set(args) - {"bundle"}
+    if unknown:
+        raise TaskError(f"explain_incident: unknown argument {sorted(unknown)[0]!r}")
+    try:
+        bundle = incident.check_bundle(args.get("bundle"))
+    except ValueError as exc:
+        raise TaskError(str(exc)) from None
+
+    def run(client: ChatClient) -> dict[str, Any]:
+        # The model is held for the whole loop: another request between two
+        # steps would make this one fail half-way.
+        def ask(messages: list[dict[str, str]]) -> tuple[str, str]:
+            result = client.chat(messages, max_tokens=PROPOSE_MAX_TOKENS)
+            return result.text, result.reasoning
+        return incident.explain(bundle, ask).as_dict()
+
+    return ctx.call_model(run)
+
+
 #: Task name -> handler. Later work packages register theirs here.
 HANDLERS: dict[str, Callable[[Context, dict[str, Any]], dict[str, Any]]] = {
     "ping": _task_ping,
     "status": _task_status,
     "propose_patch": _task_propose_patch,
+    "explain_incident": _task_explain_incident,
 }
 
 

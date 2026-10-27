@@ -24,6 +24,7 @@ TASKS = (
     "ping",
     "status",
     "propose_patch",
+    "explain_incident",
 )
 
 #: Longest accepted request or response line. A task's inputs (an intent,
