@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fr-os-ai-perimeter"
+version = "0.1.0"
+description = "FR_OS AI-Perimeter: natural-language firewall changes as validated, admin-approved config patches, plus local anomaly explanations"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "AGPL-3.0-only" }
+dependencies = [
+    # FR_OS at the state it was in when the hackathon started (the
+    # `hackathon-start` tag of the working copy). Pinned to a commit, never a
+    # branch: the router never installs anything unpinned.
+    "frfw @ git+https://github.com/starsmash29/fr_os-hackathon@815576493ca8c6512244bae9b482d6923c575650",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
