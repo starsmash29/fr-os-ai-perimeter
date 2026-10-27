@@ -31,7 +31,7 @@ never executes anything:
 
 | | Feature | Status |
 |---|---|---|
-| 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals done (A2); webUI screen and apply next |
+| 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals (A2) and the webUI screen (A3) done; installer next |
 | 2 | **Edge Anomaly Explainer:** an evidence bundle from the XDP/SNI, TLS JA4 and DNS threat signals → an incident report with NIS2 / NIST SP 800-53 control references; Shadow AI upload detection | planned |
 
 ## Models
@@ -72,6 +72,13 @@ Then, in code:
 3. **FR_OS's rule linter** (`frfw.rule_lint`): new shadowed, redundant or too-open rules.
 4. A **YAML diff** for the admin, with weakening changes called out.
 
+On the **AI-Perimeter** screen in FR_OS's webUI (admins only) the admin sees the proposal,
+the diff, the rule check and, under "Why?", the model's own reasoning. "Approve and save"
+saves exactly what was shown: once, by the admin who asked, only if `config.yaml` has not
+changed since, re-checked, replayed on the real config (not the redacted copy the model saw)
+and written through FR_OS's apply-helper, with an audit entry. FR_OS's Apply then loads it
+and rolls it back unless the admin confirms.
+
 ## Layout
 
 ```
@@ -85,7 +92,7 @@ docs/brand/           logo files
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e '.[dev]'
+pip install -e '.[dev,webui]'
 python3 -m pytest -q
 ```
 

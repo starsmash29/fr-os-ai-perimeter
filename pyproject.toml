@@ -21,10 +21,18 @@ ai-perimeter-chat = "ai_perimeter.cli:main"
 fr-ai-assist = "ai_perimeter.service:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+# The AI-Perimeter screen runs inside FR_OS's webUI: FR_OS's own webUI
+# extra (FastAPI, Jinja2, ...), same pinned commit. Nothing new.
+webui = [
+    "frfw[webui] @ git+https://github.com/starsmash29/fr_os-hackathon@815576493ca8c6512244bae9b482d6923c575650",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+ai_perimeter = ["webui/templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

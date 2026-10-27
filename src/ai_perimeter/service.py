@@ -97,8 +97,9 @@ def _task_propose_patch(ctx: Context, args: dict[str, Any]) -> dict[str, Any]:
     if unknown:
         raise TaskError(f"propose_patch: unknown argument {sorted(unknown)[0]!r}")
 
-    def ask(messages: list[dict[str, str]]) -> str:
-        return ctx.call_model(lambda c: c.chat(messages, max_tokens=PROPOSE_MAX_TOKENS).text)
+    def ask(messages: list[dict[str, str]]) -> tuple[str, str]:
+        result = ctx.call_model(lambda c: c.chat(messages, max_tokens=PROPOSE_MAX_TOKENS))
+        return result.text, result.reasoning
 
     try:
         return pipeline.propose(args.get("intent"), args.get("config"), ask).as_dict()
