@@ -113,3 +113,23 @@ def test_systemd_scores_the_exposure_low():
     assert line, out.stdout + out.stderr
     score = float(line[0].split("level for fr-ai-assist.service:")[1].split()[0])
     assert score <= 2.0, line[0]
+
+
+# --- the drop-in for FR_OS's fr-webui.service --------------------------------
+
+DROPIN = "fr-webui.service.d/ai-perimeter.conf"
+
+
+def test_the_webui_dropin_only_changes_the_command():
+    """It starts fr-webui-ai instead of fr-webui and nothing else: FR_OS's
+    account and sandbox for the webUI stay as FR_OS wrote them (A1, I1)."""
+    s = section(DROPIN, "[Service]")
+    assert s == {"ExecStart": ["", "fr-webui-ai"]}
+    assert section(DROPIN, "[Unit]") == {} and section(DROPIN, "[Install]") == {}
+
+
+def test_fr_webui_ai_is_a_console_script():
+    import tomllib
+
+    pyproject = tomllib.loads((SYSTEMD.parent / "pyproject.toml").read_text())
+    assert pyproject["project"]["scripts"]["fr-webui-ai"] == "ai_perimeter.webui.server:main"
