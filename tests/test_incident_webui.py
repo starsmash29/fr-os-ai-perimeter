@@ -130,3 +130,76 @@ def test_the_demo_scenario_end_to_end(env, tmp_path):  # noqa: F811
     assert f"Cut kids-tablet ({TABLET_IP}) off the internet" in text
     sent = json.dumps([r["json"] for r in env["provider"].requests])
     assert TABLET_IP not in sent and TABLET_MAC not in sent and "kids-tablet" not in sent
+
+
+# --- the office scenario (fictional HSML, fictional Azarus Group) ------------------------------
+
+OFFICE_NOW = 1793004000.0  # the script's office default: Monday 2026-10-26 08:40 UTC
+LAPTOP_IP, LAPTOP_MAC = "192.168.10.40", "02:00:00:00:10:04"
+NAS_IP, NAS_MAC = "192.168.10.30", "02:00:00:00:10:03"
+
+
+def _office(env, tmp_path):  # noqa: F811
+    out = tmp_path / "office"
+    subprocess.run([sys.executable, str(DEMO), "--out", str(out), "--scenario", "office"],
+                   check=True, capture_output=True)
+    env["app"].state.ai_perimeter_sources = Sources(
+        ids=out / "ai_ids_state.json", appid=out / "appid_usage.json",
+        tls=out / "tls_fingerprints.json", devices=out / "iot_inventory.json",
+        dns=out / "queries.log")
+    env["app"].state.ai_perimeter_clock = lambda: OFFICE_NOW
+    return login(env)
+
+
+def test_the_office_scenario_end_to_end(env, tmp_path):  # noqa: F811
+    """The SMB scene of the video: the engineer's laptop and the design file
+    server are listed, the reception PC is not. A model that underrates the
+    blocklisted loader is overruled -- the severity is high because the
+    evidence alone says so -- and the card carries the NIS2 24-hour note.
+    The threat feed's label reaches the model as evidence (it may cite it);
+    who the device is does not."""
+    client = _office(env, tmp_path)
+    page = client.get("/ai-perimeter")
+    assert "design-laptop" in page.text and NAS_IP in page.text
+    assert "reception-pc" not in page.text  # ordinary lookups: not flagged
+
+    env["provider"].queue = [
+        tool("tls_fingerprints"), tool("ids_events"),
+        answer(title="Laptop ran a loader the threat feed knows", severity="medium",
+               summary="device-1 connected with a TLS client the feed lists as an "
+                       "Azarus Group loader and its threat-domain lookups were blocked.",
+               evidence=["tls-1", "ids-1"],
+               suggested_intent="Cut device-1 off the internet")]
+    page = post(client, "/ai-perimeter/explain", {"ip": LAPTOP_IP})
+    text = html.unescape(page.text)
+    assert ">high</span>" in text
+    assert "The severity was raised to what the evidence alone shows." in text
+    assert "early warning to the CSIRT within 24 hours" in text
+    assert "<code>tls-1</code>" in page.text and "update-cdn-checker.example" in text
+    assert f"Cut design-laptop ({LAPTOP_IP}) off the internet</textarea>" in text
+    sent = json.dumps([r["json"] for r in env["provider"].requests])
+    assert "Azarus Group loader" in sent  # the feed's label is evidence
+    for secret in (LAPTOP_IP, LAPTOP_MAC, "design-laptop"):
+        assert secret not in sent
+
+
+def test_the_office_file_server_reads_as_dga_and_scan(env, tmp_path):  # noqa: F811
+    """The second device of the scene: the model reads the AI IDS event and
+    the DNS summary, both carrying what FR_OS's own engine counted."""
+    client = _office(env, tmp_path)
+    env["provider"].queue = [
+        tool("ids_events"), tool("dns_summary"),
+        answer(title="File server scans and looks up generated names", severity="high",
+               summary="device-1 opened 9 connections a second to new hosts and looked "
+                       "up 30 random-looking names that do not exist.",
+               evidence=["ids-1", "dns-1"],
+               suggested_intent="Cut device-1 off the internet")]
+    page = post(client, "/ai-perimeter/explain", {"ip": NAS_IP})
+    text = html.unescape(page.text)
+    assert ">high</span>" in text
+    assert "The severity was raised" not in text
+    assert f"Cut nas ({NAS_IP}) off the internet</textarea>" in text
+    sent = json.dumps([r["json"] for r in env["provider"].requests])
+    assert "DGA-like NXDOMAIN lookups" in sent and "destination-scan pattern" in sent
+    for secret in (NAS_IP, NAS_MAC):
+        assert secret not in sent
