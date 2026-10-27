@@ -1,0 +1,86 @@
+# A demo home network (no real addresses, keys or hashes): the config the
+# orchestrator tests and the demo propose changes to.
+version: 1
+hostname: fr-router
+timezone: Europe/Budapest
+
+interfaces:
+  wan:
+    device: eth0
+    zone: wan
+    description: "ISP uplink"
+  lan:
+    device: eth1
+    zone: lan
+    address: 192.168.10.1/24
+    description: "Home LAN"
+
+zones:
+  wan:
+    description: "Untrusted, internet-facing"
+  lan:
+    description: "Home devices"
+  vpn:
+    description: "WireGuard road warriors"
+
+rules:
+  - name: ssh-from-lan
+    action: accept
+    from_zone: lan
+    to_zone: self
+    proto: tcp
+    dst_port: 22
+  - name: lan-to-wan
+    action: accept
+    from_zone: lan
+    to_zone: wan
+  - name: vpn-to-lan
+    action: accept
+    from_zone: vpn
+    to_zone: lan
+
+nat:
+  masquerade:
+    - out_zone: wan
+
+dhcp:
+  lan:
+    range_start: 192.168.10.100
+    range_end: 192.168.10.199
+    dns_servers: [192.168.10.1]
+    reservations:
+      - mac: "02:00:00:00:10:01"
+        address: 192.168.10.21
+        hostname: kids-tablet
+      - mac: "02:00:00:00:10:02"
+        address: 192.168.10.22
+        hostname: living-room-tv
+      - mac: "02:00:00:00:10:03"
+        address: 192.168.10.30
+        hostname: nas
+
+adblocker:
+  enabled: true
+  serve_lan: true
+  source_urls:
+    - https://example.invalid/hosts.txt
+
+app_control:
+  enabled: true
+  blocked_apps: []
+
+ztna:
+  enabled: true
+  session_ttl_seconds: 28800
+  users:
+    - username: kolos
+      password_hash: "<removed on export: set a new password>"
+
+wireguard:
+  enabled: true
+  address: 10.99.0.1/24
+  zone: vpn
+  peers:
+    - name: laptop
+      public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      address: 10.99.0.2/32
