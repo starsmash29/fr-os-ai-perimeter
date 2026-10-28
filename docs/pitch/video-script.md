@@ -14,6 +14,8 @@ configuration (for the office scene,
 the office laptop's and reception PC's reservations), and the [demo sensor files](../../demo/shadow_ai/README.md)
 (`--scenario home` and `--scenario office`) for what the router saw. Do not show a real router configuration, credentials or account
 screens. Use repository assets and local captures; no externally loaded assets.
+How the demo files get onto the demo router for a take:
+[recording-setup.md](recording-setup.md).
 
 This draft follows main at
 [92ccfb1](https://github.com/starsmash29/fr-os-ai-perimeter/tree/92ccfb1a26f4bc6527d8b74172eeaeecf445211b).
