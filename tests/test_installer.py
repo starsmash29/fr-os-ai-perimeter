@@ -8,6 +8,7 @@ who can reach fr-ai-assist, FR_OS's integrity check, uninstall).
 
 from __future__ import annotations
 
+import re
 import os
 import shutil
 import subprocess
@@ -281,3 +282,14 @@ def test_uninstall_reverts_the_patch_and_restarts_the_helper(tmp_path):
     assert "try-restart fr-apply-helper.service" in (root / "systemctl-calls").read_text()
     assert (root / "state").read_text() == "1", "no marker, no sysctl call"
     assert (root / "sysctl-calls").read_text() == ""
+
+
+def test_the_accounting_marker_is_not_in_the_collectors_state_directory():
+    """Review F11 follow-up: systemd hands /var/lib/fr_os-ai-perimeter to
+    fr_os-sensor, so the value root later feeds to sysctl lives outside it,
+    and uninstall restores only 0 or 1 (A1)."""
+    text = (INSTALLER / "install.sh").read_text()
+    owned = re.search(r"^UPLOAD_OWNED=(\S+)$", text, re.M).group(1)
+    assert owned.startswith("/etc/fr_os/")
+    assert not owned.startswith("/var/lib/fr_os-ai-perimeter")
+    assert "0|1) ;;" in text

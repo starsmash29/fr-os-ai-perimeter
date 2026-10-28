@@ -19,7 +19,7 @@
 #   and the API key file stays root's, mode 0600.
 # - with --with-upload-bytes only: conntrack accounting
 #   (/etc/sysctl.d/60-ai-perimeter.conf; the value before is recorded in
-#   /var/lib/fr_os-ai-perimeter/upload-owned and restored on uninstall,
+#   /etc/fr_os/ai-perimeter-upload-owned and restored on uninstall,
 #   review F11), the two-file FR_OS patch
 #   (integration/fr_os/conntrack-bytes.patch, so FR_OS's integrity check
 #   lists those two files on a router that opts in, SEC-15), and the
@@ -39,8 +39,11 @@ SENSOR_USER=fr_os-sensor
 UPLOAD_UNIT=fr-ai-upload.service
 SYSCTL_CONF=/etc/sysctl.d/60-ai-perimeter.conf
 # Review F11: where --with-upload-bytes records the nf_conntrack_acct value
-# it found (root, 0600), so uninstall restores exactly that.
-UPLOAD_OWNED=/var/lib/fr_os-ai-perimeter/upload-owned
+# it found (root, 0600), so uninstall restores exactly that. Not under
+# /var/lib/fr_os-ai-perimeter: systemd hands that StateDirectory to the
+# collector's fr_os-sensor account, and a value root later feeds to sysctl
+# must not be writable by a sensor account (A1).
+UPLOAD_OWNED=/etc/fr_os/ai-perimeter-upload-owned
 PYTHON=${PYTHON:-python3}
 
 HERE=$(cd -- "$(dirname -- "$0")" && pwd)
@@ -251,12 +254,15 @@ remove_upload_bytes() {
         prior=$(cat "$UPLOAD_OWNED" 2>/dev/null || true)
         rm -f "$UPLOAD_OWNED"
         case "$prior" in
-            ''|*[!0-9]*)
-                say "WARNING: $UPLOAD_OWNED held '$prior'; leaving nf_conntrack_acct as is" ;;
+            0|1) ;;
             *)
-                sysctl -w "net.netfilter.nf_conntrack_acct=$prior" >/dev/null 2>&1 \
-                    || say "WARNING: could not restore nf_conntrack_acct to $prior" ;;
+                say "WARNING: $UPLOAD_OWNED held '$prior'; leaving nf_conntrack_acct as is"
+                prior= ;;
         esac
+        if [ -n "$prior" ]; then
+            sysctl -w "net.netfilter.nf_conntrack_acct=$prior" >/dev/null 2>&1 \
+                || say "WARNING: could not restore nf_conntrack_acct to $prior"
+        fi
     fi
     frfw_dir=$("$PYTHON" -c 'import frfw, os; print(os.path.dirname(frfw.__file__))' 2>/dev/null) || true
     if [ -n "${frfw_dir:-}" ] && [ -f "$PATCH" ] \
