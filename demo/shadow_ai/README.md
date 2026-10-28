@@ -19,6 +19,7 @@ format cannot drift):
 | `iot_inventory.json` | fr-iot-scan inventory |
 | `queries.log` | dnsmasq `log-queries=extra` |
 | `sni_events.jsonl` | fr-xdp-sni-logger event file (office scenario only) |
+| `upload.json` | fr-ai-upload totals (home scenario only) |
 
 ## Office scenario (`--scenario office`)
 
