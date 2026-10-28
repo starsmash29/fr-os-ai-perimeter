@@ -82,6 +82,12 @@ Each turn, answer with ONE JSON object and nothing else, either:
 for, in words, e.g. 'Block ChatGPT on the network' or 'Cut device-1 off \
 the internet from 22:00 to 06:00'; empty if none is needed>"}}
 
+The sections: ids_events (the router's anomaly detector), ai_usage (AI \
+services the device used), tls_fingerprints (its TLS clients), dns_summary \
+(its lookups), sni_blocks (TLS connections the router's kernel filter \
+dropped by server name; the admin's blocklist decides which names, so a drop \
+is policy at work, not by itself an attack).
+
 Severity: high = a known threat or blocklisted fingerprint, or traffic \
 that looks like an attack; medium = unusual behaviour worth a look (an \
 anomaly, heavy use of an AI service at night, a new fingerprint); low = \

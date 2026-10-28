@@ -1,9 +1,10 @@
 """A4: the evidence an incident explanation is built from.
 
 FR_OS's parser daemons already write what they saw, display-only, for the
-webUI (``frfw.paths.SENSOR_STATE_DIR`` and the resolver's query log): the AI
-IDS's flagged events, App-ID's per-client usage, the TLS fingerprint
-inventory, the device inventory. This module reads those files with FR_OS's
+webUI (``frfw.paths.SENSOR_STATE_DIR``, the resolver's query log and the XDP
+SNI filter's event file): the AI IDS's flagged events, App-ID's per-client
+usage, the TLS fingerprint inventory, the device inventory, and the TLS
+connections the kernel's eBPF/XDP filter dropped by server name. This module reads those files with FR_OS's
 own loaders, in the webUI process that may already read them, and turns one
 device's share into an **evidence bundle** for ``fr-ai-assist``.
 
@@ -16,7 +17,7 @@ Why it is built here and not by the model (FR_OS security-lessons A1, G11):
   TLS server name, a fingerprint label) is cut short, reduced to printable
   ASCII and scrubbed of anything shaped like an address, so a cloud model
   gets the household's *pattern* of traffic, not its identities.
-- **Every item has an id** (``ids-1``, ``ai-2``, ``tls-1``, ``dns-1``). An
+- **Every item has an id** (``ids-1``, ``ai-2``, ``tls-1``, ``dns-1``, ``sni-1``). An
   explanation may only cite ids that are in the bundle.
 - **No packet contents**: FR_OS never keeps any.
 
@@ -32,6 +33,7 @@ from __future__ import annotations
 
 import collections
 import ipaddress
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -54,13 +56,17 @@ NIGHT_HOURS = frozenset({22, 23, 0, 1, 2, 3, 4, 5})
 #: Only the end of the query log is read: it is trimmed by FR_OS anyway,
 #: and the webUI must not stall on a large file.
 DNS_TAIL_BYTES = 2 * 1024 * 1024
+#: The same for the XDP SNI event file, which FR_OS itself empties at 4 MB
+#: (frfw.xdp.SNI_EVENTS_MAX_BYTES).
+SNI_TAIL_BYTES = 2 * 1024 * 1024
 #: Caps on what one bundle carries (and so what a model reads).
 MAX_ITEMS = 10
 MAX_DOMAINS = 12
 MAX_TEXT = 80
 
-SECTIONS = ("ids_events", "ai_usage", "tls_fingerprints", "dns_summary")
-ID_PREFIX = {"ids_events": "ids", "ai_usage": "ai", "tls_fingerprints": "tls", "dns_summary": "dns"}
+SECTIONS = ("ids_events", "ai_usage", "tls_fingerprints", "dns_summary", "sni_blocks")
+ID_PREFIX = {"ids_events": "ids", "ai_usage": "ai", "tls_fingerprints": "tls", "dns_summary": "dns",
+             "sni_blocks": "sni"}
 SUBJECT = "device-1"
 
 
@@ -99,6 +105,7 @@ class Sources:
     tls: Path = fr_paths.TLSFP_STATE_PATH
     devices: Path = fr_paths.IOT_INVENTORY_PATH
     dns: Path = fr_paths.DNS_QUERY_LOG_PATH
+    sni: Path = fr_paths.SNI_EVENTS_PATH
 
 
 @dataclass
@@ -115,6 +122,8 @@ class Signals:
     dns_queries: int = 0
     dns_nxdomain: int = 0
     domains: collections.Counter = field(default_factory=collections.Counter)
+    #: Server names the XDP filter dropped: name -> [count, first ts, last ts].
+    sni: dict[str, list[float]] = field(default_factory=dict)
 
     def reasons(self) -> list[str]:
         out = []
@@ -124,10 +133,13 @@ class Signals:
             out.append("ai_service")
         if any(t["type"] == "blocklist" for t in self.tls):
             out.append("tls_blocklist")
+        if self.sni:
+            out.append("xdp_sni_block")
         return out
 
     def last_seen(self) -> float:
-        times = [e["ts"] for e in self.ids + self.tls] + [a["last_seen"] for a in self.ai]
+        times = ([e["ts"] for e in self.ids + self.tls] + [a["last_seen"] for a in self.ai]
+                 + [last for _count, _first, last in self.sni.values()])
         return max(times, default=0.0)
 
 
@@ -181,6 +193,7 @@ def collect(sources: Sources = Sources(), *, now: float | None = None) -> dict[s
             s.tls.append({**event, "ts": ts})
 
     _read_dns(sources.dns, client, AppMatcher(catalog), names, now)
+    _read_sni(sources.sni, client, since)
 
     inventory = load_inventory(sources.devices) or {}
     for device in inventory.get("devices", []) if isinstance(inventory.get("devices"), list) else []:
@@ -214,16 +227,8 @@ def _usage_row(app_id: str, name: str, row: dict[str, Any], now: float) -> dict[
 def _read_dns(path: Path, client, matcher: AppMatcher, names: dict[str, str], now: float) -> None:
     """Query and NXDOMAIN counts per client, the names it looked up, and
     AI services the App-ID snapshot didn't already report."""
-    try:
-        with path.open("rb") as fh:
-            fh.seek(0, 2)
-            size = fh.tell()
-            fh.seek(max(0, size - DNS_TAIL_BYTES))
-            text = fh.read().decode("utf-8", "replace")
-    except OSError:
-        return
     lookups: dict[tuple[str, str], int] = collections.Counter()
-    for line in text.splitlines()[1 if size > DNS_TAIL_BYTES else 0:]:
+    for line in _tail(path, DNS_TAIL_BYTES):
         message = dnsmasq_message(line)
         query = _DNS_QUERY_RE.match(message)
         if query:
@@ -248,6 +253,46 @@ def _read_dns(path: Path, client, matcher: AppMatcher, names: dict[str, str], no
             continue
         s.ai.append({"app": app, "service": names[app], "source": "dns", "hits": hits,
                      "night_hits": None, "first_seen": None, "last_seen": now, "active": None})
+
+
+def _tail(path: Path, limit: int) -> list[str]:
+    """The last ``limit`` bytes of a log FR_OS keeps appending to, as whole
+    lines; a missing or unreadable file is no lines."""
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - limit))
+            text = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    return text.splitlines()[1 if size > limit else 0:]
+
+
+def _read_sni(path: Path, client, since: float) -> None:
+    """The kernel's own drops: fr-xdp-sni-logger's event file, one JSON
+    object a line (frfw.xdp.format_event_json). Only ``drop`` lines count
+    -- a ``pass`` is only logged while an admin is debugging the filter --
+    and only the source and the server name are kept: the destination
+    address says nothing the server name doesn't, and would be an address
+    to scrub. A malformed line is skipped, as fr-ai-ids does."""
+    for line in _tail(path, SNI_TAIL_BYTES):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("action") != "drop":
+            continue
+        ts = _number(event.get("ts"))
+        name = event.get("sni")
+        if ts is None or ts < since or not isinstance(name, str) or not name:
+            continue
+        s = client(event.get("saddr"))
+        if s is None:
+            continue
+        row = s.sni.setdefault(name.lower().rstrip("."), [0, ts, ts])
+        row[0] += 1
+        row[1], row[2] = min(row[1], ts), max(row[2], ts)
 
 
 # --- the screen's list and the bundle -------------------------------------------------------
@@ -305,6 +350,10 @@ def build_bundle(ip: str, sources: Sources = Sources(), *, now: float | None = N
         sections["dns_summary"].append({
             "lookups": s.dns_queries, "nxdomain": s.dns_nxdomain,
             "top_names": [[text(n), c] for n, c in s.domains.most_common(MAX_DOMAINS)]})
+    for name, (count, first, last) in sorted(s.sni.items(), key=lambda kv: (-kv[1][0], kv[0]))[:MAX_ITEMS]:
+        sections["sni_blocks"].append({
+            "server_name": text(name), "dropped": int(count),
+            "first": _when(first), "last": _when(last), "by": "kernel eBPF/XDP filter"})
     for name, items in sections.items():
         for n, item in enumerate(items, 1):
             item["id"] = f"{ID_PREFIX[name]}-{n}"
