@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime
 import importlib.util
+import json
 import re
 import subprocess
 import sys
@@ -358,3 +359,99 @@ def test_home_scenario_output_is_unchanged(tmp_path: Path) -> None:
                         "--now", str(NOW))
     for name in FILES:
         assert (cli_default / name).read_bytes() == (cli_home / name).read_bytes()
+
+
+#: frfw.xdp.format_event_json's keys, in order. The demo builds each SNI
+#: line with json.dumps of a dict in this order instead of calling the
+#: function, because it stamps time.time() and the output must stay
+#: deterministic.
+SNI_KEYS = ("ts", "action", "saddr", "sport", "daddr", "dport", "sni")
+
+
+def parsed_sni_events(path: Path) -> list[dict]:
+    """Every sni_events.jsonl line, parsed line by line, with exactly the
+    XDP event keys in order -- the shape fr-xdp-sni-logger writes."""
+    lines = (path / "sni_events.jsonl").read_text().splitlines()
+    assert lines
+    events = []
+    for line in lines:
+        event = json.loads(line)
+        assert list(event.keys()) == list(SNI_KEYS), line
+        events.append(event)
+    return events
+
+
+def test_office_sni_events_have_exact_keys_in_order(office_sensors: Path) -> None:
+    events = parsed_sni_events(office_sensors)
+    assert len(events) == 5
+    assert sum(1 for e in events if e["action"] == "drop") == 4
+    assert sum(1 for e in events if e["action"] == "pass") == 1
+
+
+def test_office_sni_drops_follow_the_blocklist_event(office_sensors: Path) -> None:
+    state = load_state(office_sensors / "tls_fingerprints.json")
+    blocklist = [e for e in state["events"] if e["type"] == "blocklist"]
+    assert len(blocklist) == 1
+    blocked_ts = blocklist[0]["ts"]
+    drops = [e for e in parsed_sni_events(office_sensors) if e["action"] == "drop"]
+    assert len(drops) == 4
+    for drop in drops:
+        assert drop["saddr"] == DESIGN_LAPTOP_IP
+        assert drop["sni"] == OFFICE_LOADER_SNI
+        assert drop["dport"] == 443
+        assert OFFICE_WINDOW_START <= drop["ts"] <= OFFICE_NOW
+        assert drop["ts"] > blocked_ts
+
+
+def test_office_sni_pass_is_from_reception(office_sensors: Path) -> None:
+    passes = [e for e in parsed_sni_events(office_sensors) if e["action"] == "pass"]
+    assert len(passes) == 1
+    assert passes[0]["saddr"] == RECEPTION_IP
+
+
+def test_office_sni_addresses_and_names_are_invented(office_sensors: Path) -> None:
+    for event in parsed_sni_events(office_sensors):
+        for addr in (event["saddr"], event["daddr"]):
+            assert addr.startswith("192.168.10.") or addr.startswith("203.0.113."), addr
+        assert event["sni"].endswith(".example"), event["sni"]
+
+
+def test_office_sni_drops_are_readable_by_ai_ids(office_sensors: Path) -> None:
+    """The drop lines carry the fields fr-ai-ids reads: its SNI handler
+    keeps a line only when action is "drop" and saddr is a string."""
+    lines = (office_sensors / "sni_events.jsonl").read_text().splitlines()
+    drops = [line for line in lines if json.loads(line)["action"] == "drop"]
+    assert len(drops) == 4
+    for line in drops:
+        event = json.loads(line)
+        assert event["action"] == "drop"
+        assert isinstance(event["saddr"], str)
+
+
+def test_home_writes_no_sni_file(sensors: Path) -> None:
+    assert not (sensors / "sni_events.jsonl").exists()
+    names = sorted(p.name for p in sensors.iterdir() if p.is_file())
+    assert names == sorted(FILES)
+
+
+def test_sensor_file_counts_by_scenario(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location("make_sensor_files", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    home_paths = module.write_sensor_files(tmp_path / "home", NOW, scenario="home")
+    assert [p.name for p in home_paths] == list(FILES)
+    assert not (tmp_path / "home" / "sni_events.jsonl").exists()
+    office_paths = module.write_sensor_files(
+        tmp_path / "office", OFFICE_NOW, scenario="office")
+    assert [p.name for p in office_paths] == [*FILES, "sni_events.jsonl"]
+
+
+def test_office_same_now_gives_identical_sni_file(tmp_path: Path) -> None:
+    first = generate(tmp_path / "first", "--scenario", "office",
+                     "--now", str(OFFICE_NOW))
+    second = generate(tmp_path / "second", "--scenario", "office",
+                      "--now", str(OFFICE_NOW))
+    assert (first / "sni_events.jsonl").is_file()
+    assert (first / "sni_events.jsonl").read_bytes() == (
+        second / "sni_events.jsonl").read_bytes()

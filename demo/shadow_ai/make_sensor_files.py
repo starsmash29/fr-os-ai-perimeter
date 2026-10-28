@@ -3,8 +3,9 @@
 
 Writes the files FR_OS's sensor daemons write -- an fr-appid usage
 snapshot, an fr-tls-fp inventory snapshot, fr-ai-ids events, an
-fr-iot-scan inventory and a dnsmasq query log -- for one scripted demo
-scenario. Two scenarios share the five file names:
+fr-iot-scan inventory and a dnsmasq query log, plus (office only) the
+XDP SNI event file -- for one scripted demo scenario. The home
+scenario writes the five file names; the office scenario adds a sixth:
 
 - "home": late-evening ChatGPT session on the demo home network
   (``src/ai_perimeter/eval/home.yaml``).
@@ -24,10 +25,10 @@ The JSON files are built with FR_OS's own classes
 ``Observation``/``classify``) and written the way the daemons write them,
 so the format cannot drift. FR_OS is only read, never changed.
 
-All addresses are invented (192.168.10.x, 02:00:00 MACs) and every
-office domain is invented under .example. No network access, no
-secrets: the output is deterministic for a given ``--scenario`` and
-``--now``.
+All addresses are invented (192.168.10.x, 203.0.113.x documentation
+addresses for the office SNI events, 02:00:00 MACs) and every office
+domain is invented under .example. No network access, no secrets: the
+output is deterministic for a given ``--scenario`` and ``--now``.
 
 Usage:
     python3 demo/shadow_ai/make_sensor_files.py --out DIR [--scenario {home,office}] [--now EPOCH]
@@ -139,6 +140,13 @@ OFFICE_RECEPTION_NAMES = (
 
 #: How many DGA-style names the file server looks up.
 OFFICE_DGA_COUNT = 30
+
+#: Invented internet addresses for the office SNI events (RFC 5737
+#: documentation range): the loader's host and the ordinary host the
+#: reception PC reaches. Documentation addresses keep the demo off real
+#: space while looking like public destinations.
+OFFICE_LOADER_DADDR = "203.0.113.10"
+OFFICE_RECEPTION_DADDR = "203.0.113.20"
 
 DAY = 24 * 3600
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -538,11 +546,53 @@ def build_queries_log_office(now: float) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_sni_events_office(now: float) -> str:
+    """fr-xdp-sni-logger's event file (``/var/log/fr_os-sni/events.jsonl``)
+    for the office: four kernel drops of the design laptop's retries to
+    the invented loader domain after its TLS hello was blocklisted, plus
+    one pass from the reception PC to an ordinary invented name, so the
+    reader's drop-only handling stays visible (FR_OS logs passes only
+    while reporting is on). Each line is ``json.dumps`` of a dict in
+    ``frfw.xdp.format_event_json``'s key order instead of calling it,
+    because it stamps ``time.time()`` and the demo must stay
+    deterministic for a given ``--now``. HSML and the Azarus Group are
+    fictional; all indicators are invented."""
+    drops = []  # (ts, sport) in chronological order
+    for n, ago in enumerate((580, 490, 400, 310)):
+        drops.append((now - ago, 49152 + n))
+    events = []
+    for ts, sport in drops:
+        events.append((ts, {
+            "ts": ts,
+            "action": "drop",
+            "saddr": DESIGN_LAPTOP_IP,
+            "sport": sport,
+            "daddr": OFFICE_LOADER_DADDR,
+            "dport": 443,
+            "sni": OFFICE_LOADER_SNI,
+        }))
+    pass_ts = now - 450
+    events.append((pass_ts, {
+        "ts": pass_ts,
+        "action": "pass",
+        "saddr": RECEPTION_IP,
+        "sport": 49156,
+        "daddr": OFFICE_RECEPTION_DADDR,
+        "dport": 443,
+        "sni": OFFICE_RECEPTION_SNI_BASE,
+    }))
+    events.sort(key=lambda row: row[0])
+    return "\n".join(json.dumps(event) for _ts, event in events) + "\n"
+
+
 def write_sensor_files(out: Path, now: float, scenario: str = "home") -> list[Path]:
-    """Write all five files the way the daemons write them: compact JSON
-    for appid/tlsfp/ai-ids, indented sorted JSON for the IoT scan.
-    ``scenario`` selects the scripted story; "home" is the default so
-    existing callers keep getting byte-for-byte what they got."""
+    """Write the sensor files the way the daemons write them: compact JSON
+    for appid/tlsfp/ai-ids, indented sorted JSON for the IoT scan, one
+    JSON object per line for the SNI events. The home scenario writes
+    the same five files as always; the office scenario adds the XDP SNI
+    event file as a sixth. ``scenario`` selects the scripted story;
+    "home" is the default so existing callers keep getting byte-for-byte
+    what they got."""
     out.mkdir(parents=True, exist_ok=True)
     if scenario == "office":
         texts = (
@@ -553,6 +603,7 @@ def write_sensor_files(out: Path, now: float, scenario: str = "home") -> list[Pa
             ("iot_inventory.json",
              json.dumps(build_iot_inventory_office(now), indent=2, sort_keys=True)),
             ("queries.log", build_queries_log_office(now)),
+            ("sni_events.jsonl", build_sni_events_office(now)),
         )
     elif scenario == "home":
         texts = (
