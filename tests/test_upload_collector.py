@@ -102,10 +102,10 @@ def test_flows_appear_grow_and_disappear_and_totals_add_up_once(tmp_path):
     doc = read(tmp_path)
     assert doc["generated"] == 1045 and doc["window_seconds"] == WINDOW_SECONDS
     pairs = by_pair(doc)
-    assert pairs[(LAN, WAN)] == {"device": LAN, "dst": WAN, "bytes_out": 2100,
+    assert pairs[(LAN, WAN)] == {"device": LAN, "dst": WAN, "bytes_out": 2110,
                                  "bytes_in": 220, "flows": 2,
                                  "first": 1015, "last": 1030}
-    assert (LAN, DNS) not in pairs, "a flow that never grew adds nothing"
+    assert (LAN, DNS) not in pairs, "a baseline flow that never grew adds nothing"
     server.shutdown()
     server.server_close()
 
@@ -204,7 +204,7 @@ def test_a_broken_answer_does_not_crash_the_loop(tmp_path, caplog):
     ]
     collector, server = run(tmp_path, script, lambda: now[0])
     pairs = by_pair(read(tmp_path))
-    assert pairs[(LAN, WAN)]["bytes_out"] == 20
+    assert pairs[(LAN, WAN)]["bytes_out"] == 30
     assert pairs[(LAN, WAN)]["bytes_in"] == 4
     assert len(caplog.records) == 5, "each broken answer is logged and skipped"
     server.shutdown()
@@ -222,6 +222,72 @@ def test_a_new_flow_for_a_known_pair_counts_as_a_flow(tmp_path):
     ]
     collector, server = run(tmp_path, script, lambda: now[0])
     assert by_pair(read(tmp_path))[(LAN, WAN)]["flows"] == 2
+    server.shutdown()
+    server.server_close()
+
+
+def test_a_single_sample_flow_after_the_first_is_counted_in_full(tmp_path):
+    now = [9000.0]
+    script = [
+        {"ok": True, "flows": []},
+        {"ok": True, "flows": [flow(out=12345, inn=678)]},
+        {"ok": True, "flows": []},
+    ]
+    server = start(tmp_path / "helper.sock", script)
+    collector = Collector(socket_path=tmp_path / "helper.sock",
+                          output=tmp_path / "upload.json", clock=lambda: now[0])
+    for tick in (9000.0, 9015.0, 9030.0):
+        now[0] = tick
+        collector.sample()
+    pairs = by_pair(read(tmp_path))
+    assert pairs[(LAN, WAN)] == {"device": LAN, "dst": WAN, "bytes_out": 12345,
+                                 "bytes_in": 678, "flows": 1,
+                                 "first": 9015, "last": 9015}
+    server.shutdown()
+    server.server_close()
+
+
+def test_first_sample_flows_are_baseline_not_counted(tmp_path):
+    now = [9500.0]
+    script = [
+        {"ok": True, "flows": [flow(out=5000, inn=1000),
+                               flow(dst=DNS, sport=50001, out=7000, inn=0)]},
+        {"ok": True, "flows": [flow(out=6000, inn=1200)]},
+    ]
+    server = start(tmp_path / "helper.sock", script)
+    collector = Collector(socket_path=tmp_path / "helper.sock",
+                          output=tmp_path / "upload.json", clock=lambda: now[0])
+    for tick in (9500.0, 9515.0):
+        now[0] = tick
+        collector.sample()
+    pairs = by_pair(read(tmp_path))
+    assert pairs[(LAN, WAN)]["bytes_out"] == 1000, "only the delta, not the 5000 history"
+    assert pairs[(LAN, WAN)]["bytes_in"] == 200
+    assert pairs[(LAN, WAN)]["flows"] == 1
+    assert (LAN, DNS) not in pairs, "a baseline flow that never grew adds nothing"
+    server.shutdown()
+    server.server_close()
+
+
+def test_a_pair_active_for_30h_reports_only_the_last_24h(tmp_path):
+    t0 = 360000.0
+    now = [t0]
+    script = [{"ok": True, "flows": []}]
+    script += [{"ok": True, "flows": [flow(sport=50000 + h, out=1000, inn=100)]}
+               for h in range(1, 31)]
+    server = start(tmp_path / "helper.sock", script)
+    collector = Collector(socket_path=tmp_path / "helper.sock",
+                          output=tmp_path / "upload.json", clock=lambda: now[0])
+    for h in range(31):
+        now[0] = t0 + h * 3600
+        collector.sample()
+    pairs = by_pair(read(tmp_path))
+    row = pairs[(LAN, WAN)]
+    assert row["bytes_out"] == 25 * 1000, "hours 6..30 kept, hours 1..5 aged out"
+    assert row["bytes_in"] == 25 * 100
+    assert row["flows"] == 25
+    assert row["first"] == int(t0 + 6 * 3600)
+    assert row["last"] == int(t0 + 30 * 3600)
     server.shutdown()
     server.server_close()
 

@@ -10,12 +10,15 @@ A1, I1, F1):
   never touches FR_OS's files.
 - **It counts LAN uploads, nothing else.** Only flows whose source is on
   the LAN -- an RFC 1918 / ULA address, or a source the helper labelled
-  with a LAN neighbour's MAC -- are counted. Deltas between consecutive
-  samples are added once, when seen; a flow that opens and closes between
-  two samples is not seen, so every total is "at least".
+  with a LAN neighbour's MAC -- are counted. A flow first seen after the
+  first sample started after the previous sample, so its full current
+  bytes are counted; only the very first sample is a baseline (those
+  flows may be hours old). A flow that opens and closes between two
+  samples is never seen, so every total is "at least".
 - **Bounded (I1).** At most :data:`MAX_PAIRS` ``(device, dst)`` pairs are
-  kept, the stalest dropped first, and pairs older than the 24 h window
-  age out. A broken helper answer is logged and skipped; the loop never
+  kept, the stalest dropped first, and per-hour buckets older than the
+  24 h window age out, so a pair active for days reports only the last
+  24 h. A broken helper answer is logged and skipped; the loop never
   crashes on one.
 
 The totals are written every sample, atomically (temp file + rename, mode
@@ -35,7 +38,7 @@ import logging
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -60,12 +63,49 @@ _LAN_V6 = (ipaddress.ip_network("fc00::/7"),)
 
 
 @dataclass
-class _Totals:
+class _Bucket:
     bytes_out: int = 0
     bytes_in: int = 0
     flows: int = 0
     first: float = 0.0
     last: float = 0.0
+
+
+@dataclass
+class _Totals:
+    buckets: dict[int, _Bucket] = field(default_factory=dict)
+
+    def add(self, now: float, out: int, inn: int, new_flow: bool) -> None:
+        hour = int(now // 3600)
+        bucket = self.buckets.get(hour)
+        if bucket is None:
+            bucket = self.buckets[hour] = _Bucket(first=now, last=now)
+        bucket.bytes_out += out
+        bucket.bytes_in += inn
+        if new_flow:
+            bucket.flows += 1
+        bucket.first = min(bucket.first, now)
+        bucket.last = max(bucket.last, now)
+
+    @property
+    def bytes_out(self) -> int:
+        return sum(b.bytes_out for b in self.buckets.values())
+
+    @property
+    def bytes_in(self) -> int:
+        return sum(b.bytes_in for b in self.buckets.values())
+
+    @property
+    def flows(self) -> int:
+        return sum(b.flows for b in self.buckets.values())
+
+    @property
+    def first(self) -> float:
+        return min((b.first for b in self.buckets.values()), default=0.0)
+
+    @property
+    def last(self) -> float:
+        return max((b.last for b in self.buckets.values()), default=0.0)
 
 
 @dataclass
@@ -132,6 +172,8 @@ class Collector:
         self._clock = clock
         self._last: dict[tuple, tuple[int, int]] = {}
         self._totals: dict[tuple[str, str], _Totals] = {}
+        self._baseline_done = False
+        self._counted: set[tuple] = set()
 
     def sample(self) -> None:
         """One round trip: ask, count, write. Never raises."""
@@ -146,24 +188,31 @@ class Collector:
             log.warning("sample skipped: %s", exc)
 
     def update(self, flows: list, now: float) -> None:
-        """Count one sample's deltas. A flow seen for the first time sets a
-        baseline and adds nothing yet; its growth is added, once, on the
-        samples after. A flow that disappears had every seen delta added
-        already, so forgetting it adds nothing twice."""
+        """Count one sample. Only the very first sample is a baseline: its
+        flows may be hours old, so they set baselines and add nothing. A
+        flow first seen later started after the previous sample, so its
+        full current bytes are counted, its pair's entry is created then,
+        and its flow is counted once. Later growth of a known flow is
+        added as a delta, once. A flow that disappears had everything
+        seen added already, so forgetting it adds nothing twice."""
         seen: dict[tuple, _Flow] = {}
         for flow in flows:
             parsed = _parse_flow(flow)
             if parsed is not None:
                 seen[parsed.key] = parsed
+        first = not self._baseline_done
         for key, flow in seen.items():
             prev = self._last.get(key)
             self._last[key] = (flow.bytes_out, flow.bytes_in)
             pair = (flow.device, flow.dst)
             if prev is None:
+                if first:
+                    continue
                 entry = self._totals.get(pair)
-                if entry is not None:
-                    entry.flows += 1
-                    entry.last = now
+                if entry is None:
+                    entry = self._totals[pair] = _Totals()
+                entry.add(now, flow.bytes_out, flow.bytes_in, True)
+                self._counted.add(key)
                 continue
             out = max(0, flow.bytes_out - prev[0])
             inn = max(0, flow.bytes_in - prev[1])
@@ -171,20 +220,25 @@ class Collector:
                 continue
             entry = self._totals.get(pair)
             if entry is None:
-                entry = self._totals[pair] = _Totals(first=now, last=now, flows=1)
-            else:
-                entry.last = now
-            entry.bytes_out += out
-            entry.bytes_in += inn
+                entry = self._totals[pair] = _Totals()
+            new_flow = key not in self._counted
+            entry.add(now, out, inn, new_flow)
+            self._counted.add(key)
         for key in set(self._last) - set(seen):
             del self._last[key]
+            self._counted.discard(key)
+        self._baseline_done = True
 
     def write(self, now: float) -> None:
         """Age out, bound, and write the totals atomically (temp file +
-        rename, mode 0640)."""
+        rename, mode 0640). Buckets older than the window are dropped per
+        pair, so the file reports the sum of the buckets still kept."""
         cutoff = now - WINDOW_SECONDS
-        for pair in [p for p, t in self._totals.items() if t.last < cutoff]:
-            del self._totals[pair]
+        for pair, totals in list(self._totals.items()):
+            for hour in [h for h, b in totals.buckets.items() if b.last < cutoff]:
+                del totals.buckets[hour]
+            if not totals.buckets:
+                del self._totals[pair]
         while len(self._totals) > MAX_PAIRS:
             oldest = min(self._totals, key=lambda p: (self._totals[p].last,
                                                      self._totals[p].first))
