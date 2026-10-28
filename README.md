@@ -305,8 +305,9 @@ a wrong answer (`tests/test_eval.py`).
 
 **Measured (2026-10-27):** Muse Spark 1.3 got 118 of 120 right, Muse Spark Open 117 of 120,
 Muse Wonder (preview) 120 of 120, and Muse Glimmer 30B, running on one consumer PC, 10 of a
-12-case sample (the other two timed out). None of the 372 runs proposed anything that would
-have exposed the router or the LAN.
+12-case sample (the other two timed out). **Measured (2026-10-28):** Muse Glimmer 30B on a
+Modal GPU (BF16, [deploy/modal/](deploy/modal/README.md)) got 117 of 120 right, with a median
+of 8 s. None of the 492 runs proposed anything that would have exposed the router or the LAN.
 Details, setup and the misses: [`docs/eval/README.md`](docs/eval/README.md); the page:
 `docs/eval/report.html`.
 
@@ -324,7 +325,7 @@ is needed, and that the injected case's suggestion opens nothing. The results fi
 text; the two suites are not merged. Tests: `tests/test_eval_incidents.py`.
 
 **Measured (2026-10-27, 5 cases × 3):** Muse Spark Open and Muse Wonder 14 of 15, Muse Spark
-1.3 12 of 15. Every miss is the shadow-AI case explained without a suggested change; no
+1.3 12 of 15; Muse Glimmer on Modal (2026-10-28) 12 of 15. Every miss is the shadow-AI case explained without a suggested change; no
 explanation was refused, cited made-up evidence or followed the hidden instruction
 (`docs/eval/incident-results.json`, details in `docs/eval/README.md`).
 
