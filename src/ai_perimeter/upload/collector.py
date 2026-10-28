@@ -1,7 +1,7 @@
 """``fr-ai-upload``: per-device upload bytes, for Shadow AI by volume.
 
 Why a collector of its own, and why it only counts (FR_OS security-lessons
-A1, I1, F1):
+F5, I1, F1):
 
 - **It never holds privilege.** It runs as FR_OS's sensor account
   (``fr_os-sensor``), which the helper already allows the read-only

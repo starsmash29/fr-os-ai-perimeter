@@ -14,7 +14,7 @@
 # - no FR_OS file: the webUI gets the screen from fr-webui-ai, started by a
 #   drop-in for FR_OS's unit, so FR_OS's integrity check stays clean (SEC-15);
 # - fr-ai-assist runs as a dynamic, unprivileged account in its own sandbox,
-#   reachable only by the webUI's account (security-lessons A1, I1);
+#   reachable only by the webUI's account (security-lessons F5, I1);
 # - it is off until /etc/fr_os/ai-perimeter.yaml says enabled: true (I1, K7),
 #   and the API key file stays root's, mode 0600.
 # - with --with-upload-bytes only: conntrack accounting
@@ -42,7 +42,7 @@ SYSCTL_CONF=/etc/sysctl.d/60-ai-perimeter.conf
 # it found (root, 0600), so uninstall restores exactly that. Not under
 # /var/lib/fr_os-ai-perimeter: systemd hands that StateDirectory to the
 # collector's fr_os-sensor account, and a value root later feeds to sysctl
-# must not be writable by a sensor account (A1).
+# must not be writable by a sensor account (F5).
 UPLOAD_OWNED=/etc/fr_os/ai-perimeter-upload-owned
 PYTHON=${PYTHON:-python3}
 
@@ -294,7 +294,7 @@ check_installed() {
     ping_as "$WEBUI_USER" >/dev/null 2>&1 \
         || die "the webUI's account can't reach fr-ai-assist (journalctl -u fr-ai-assist)"
     if id "$SENSOR_USER" >/dev/null 2>&1 && ping_as "$SENSOR_USER" >/dev/null 2>&1; then
-        die "$SENSOR_USER reached fr-ai-assist: only the webUI may (A1)"
+        die "$SENSOR_USER reached fr-ai-assist: only the webUI may (F5)"
     fi
     systemctl is-active --quiet fr-webui.service || die "fr-webui did not come back (journalctl -u fr-webui)"
     say "checked: only $WEBUI_USER reaches fr-ai-assist; the webUI is running"

@@ -8,7 +8,7 @@ docs/security-lessons.md, cited by ID):
 
 - **English** for everything committed.
 - **The model never executes.** The AI service runs unprivileged, in its own
-  systemd sandbox, with no access to the FR_OS apply-helper (A1, I1). Its
+  systemd sandbox, with no access to the FR_OS apply-helper (F5, I1). Its
   output is untrusted input and goes through the FR_OS validator, the rule
   linter and the deny list in code before an admin approves it.
 - **Local by default** (G11). A cloud provider is opt-in and documented.

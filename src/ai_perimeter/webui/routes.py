@@ -1,6 +1,6 @@
 """``/ai-perimeter``: ask for a change in words, review it, save it.
 
-Why it is built this way (FR_OS security-lessons A1, G3, G9):
+Why it is built this way (FR_OS security-lessons F5, G3, G9):
 
 - **The webUI never trusts the proposal it is shown.** ``fr-ai-assist``
   runs the model and judges its patch, but its answer is still input: the
@@ -43,6 +43,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Form, Request
 
+from frfw.appid import CatalogError
 from frfw.config.export import redacted
 from frfw.webui import audit
 from frfw.webui.actions import try_save
@@ -132,7 +133,9 @@ def _status(request: Request) -> dict[str, Any]:
 
 
 def _strings(value: Any, limit: int = 40) -> list[str]:
-    return [str(v) for v in value[:limit]] if isinstance(value, list) else []
+    """Model text for the screen: plain strings, bidi-stripped (review2 C19)."""
+    return [evidence.strip_bidi_controls(str(v)) for v in value[:limit]] \
+        if isinstance(value, list) else []
 
 
 def _diff_lines(diff: str) -> list[tuple[str, str]]:
@@ -154,7 +157,7 @@ def _diff_lines(diff: str) -> list[tuple[str, str]]:
 
 def _view(result: dict[str, Any]) -> tuple[dict[str, Any], Patch]:
     """The service's proposal, re-read: the patch through the closed
-    format, everything else as plain strings."""
+    format, everything else as plain strings, bidi-stripped (review2 C19)."""
     patch = patch_from_dict({"summary": result.get("summary", ""),
                              "operations": result.get("operations", [])})
     status = result.get("status")
@@ -172,7 +175,7 @@ def _view(result: dict[str, Any]) -> tuple[dict[str, Any], Patch]:
     reasoning = result.get("reasoning") if isinstance(result.get("reasoning"), str) else ""
     return {
         "status": status,
-        "summary": patch.summary,
+        "summary": evidence.strip_bidi_controls(patch.summary),
         "operations": [_describe(op) for op in patch.ops],
         "diff": _diff_lines(diff),
         "findings": findings[:40],
@@ -218,11 +221,17 @@ def _suspects(request: Request, raw: dict[str, Any]) -> list[dict[str, Any]]:
     try:
         rows = evidence.suspects(request.app.state.ai_perimeter_sources,
                                  now=request.app.state.ai_perimeter_clock(), labels=_labels(raw))
-    except (OSError, ValueError):
+    except (OSError, ValueError, CatalogError):
+        # Review2 C11: a sensor file FR_OS itself cannot read degrades the
+        # list to empty, never to a 500.
         return []
     for row in rows:
         row["last_seen"] = time.strftime("%a %H:%M", time.localtime(row["last_seen"])) \
             if row["last_seen"] else ""
+        # Review2 C19: sensor-made strings for the screen.
+        row["name"] = evidence.strip_bidi_controls(row["name"])
+        row["mac"] = evidence.strip_bidi_controls(row["mac"])
+        row["ai_services"] = [evidence.strip_bidi_controls(a) for a in row["ai_services"]]
     return rows
 
 
@@ -234,27 +243,32 @@ def _named(text: str, names: dict[str, str]) -> str:
 
 def _explanation(result: dict[str, Any], bundle: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
     """The service's answer, re-read: only known fields, as text, with the
-    device's name put back."""
+    device's name put back for the admin's eyes only -- the
+    ``suggested_intent`` prefilled into the request box keeps the
+    pseudonym, so proposing it sends the model no name, address or MAC
+    (review2 F2). Every free-text field is bidi-stripped (review2 C19)."""
     status = result.get("status")
     if status not in ("ready", "refused"):
         raise AssistError("the AI-Perimeter service's answer was malformed")
     items = {item["id"]: item for section in bundle["sections"].values() for item in section}
     cited = [i for i in _strings(result.get("evidence")) if i in items]
     severity = result.get("severity")
+    suggested = evidence.strip_bidi_controls(str(result.get("suggested_intent") or ""))
     return {
         "status": status,
-        "title": _named(str(result.get("title") or ""), names),
+        "title": evidence.strip_bidi_controls(_named(str(result.get("title") or ""), names)),
         "severity": severity if severity in ("low", "medium", "high") else "",
         "severity_raised": result.get("severity_raised") is True,
-        "summary": _named(str(result.get("summary") or ""), names),
+        "summary": evidence.strip_bidi_controls(_named(str(result.get("summary") or ""), names)),
         "evidence": [{"id": i, "item": {k: v for k, v in items[i].items() if k != "id"}} for i in cited],
-        "suggested_intent": _named(str(result.get("suggested_intent") or ""), names)[:MAX_INTENT],
+        "suggested_intent": suggested[:MAX_INTENT],
+        "suggested_intent_shown": evidence.strip_bidi_controls(_named(suggested, names))[:MAX_INTENT],
         "controls": _strings(result.get("controls"), 10),
-        "nis2_note": str(result.get("nis2_note") or ""),
+        "nis2_note": evidence.strip_bidi_controls(str(result.get("nis2_note") or "")),
         "steps": _strings(result.get("steps"), 10),
         "problems": _strings(result.get("problems"), 10),
-        "reasoning": str(result.get("reasoning") or ""),
-        "device": next(iter(names.values()), ""),
+        "reasoning": evidence.strip_bidi_controls(str(result.get("reasoning") or "")),
+        "device": evidence.strip_bidi_controls(next(iter(names.values()), "")),
     }
 
 

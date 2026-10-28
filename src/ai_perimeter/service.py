@@ -1,6 +1,6 @@
 """``fr-ai-assist``: the AI-Perimeter's model service.
 
-Why a service of its own, and why so narrow (FR_OS security-lessons A1, I1):
+Why a service of its own, and why so narrow (FR_OS security-lessons F5, I1):
 
 - **It never holds privilege.** It runs under a systemd ``DynamicUser`` in a
   full sandbox, has no access to FR_OS's apply-helper socket and can't read
