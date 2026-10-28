@@ -122,10 +122,10 @@ holds the whole model is what makes it interactive.
 
 ### Muse Glimmer on a cloud GPU (Modal)
 
-The same open-weight model, on one rented L40S instead of your own PC, behind an
-API key: [`deploy/modal/`](deploy/modal/README.md) has the app, its pinned inputs and the
-steps. It is a cloud provider like the two below (`allow_cloud: true`, HTTPS, a key
-file), so it is opt-in, and it scales to zero when idle.
+The same open-weight model on a rented GPU instead of your own PC, as a Modal
+Dedicated Endpoint behind a proxy token: [`deploy/modal/`](deploy/modal/README.md) has
+the steps and what was run. It is a cloud provider like the two below
+(`allow_cloud: true`, HTTPS, a key file), so it is opt-in, and it scales to zero when idle.
 
 ### Baseten / Muse Spark Open
 
