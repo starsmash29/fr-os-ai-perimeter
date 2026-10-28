@@ -92,8 +92,10 @@ them (for example the GGUF build in
 together with their licence notice.
 The evaluation used `Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf` from that
 repository (docs/eval/README.md).
-TODO(claude): record the checkpoint, quantization and serving setup used for
-the demo video once it is chosen.
+The demo video uses the full-precision checkpoint instead:
+`meta-models/Muse-Glimmer-30B` at revision
+`f84ecc3a0ea984a4c04542a84269e3d065350a6e`, BF16, served by a Modal
+Dedicated Endpoint on one H200 GPU ([deploy/modal/](deploy/modal/README.md)).
 
 TODO(claude): verify that Baseten's `meta-models/muse-spark-open-1026`
 deployment maps to the documented Muse Spark Open release, and record the

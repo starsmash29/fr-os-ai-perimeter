@@ -20,7 +20,11 @@ kids-tablet patch, dangerous-rule refusals and an injected-model refusal.
 Those tests supply the model's answer: they establish the intended deterministic
 checks, not a measured success rate for a live Meta model.
 
-TODO(claude): verify the recording build, selected model/provider, actual
+The recording uses Muse Glimmer 30B BF16 on a Modal Dedicated Endpoint
+([deploy/modal/](../../deploy/modal/README.md)); warm it up before recording,
+because the first request after idle waits for a cold start.
+
+TODO(claude): verify the recording build, actual
 responses and installed save/Apply/rollback behavior before recording. Capture
 the real outcome; do not relabel a result or present a test fixture as live model
 output. If inference waits are cut, label the cut and show the measured duration
