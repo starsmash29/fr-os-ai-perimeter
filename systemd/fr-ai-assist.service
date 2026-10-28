@@ -9,7 +9,7 @@ ConditionPathExists=/etc/fr_os/ai-perimeter.yaml
 
 [Service]
 Type=simple
-# Its own unprivileged account, made per start (security-lessons A1): no
+# Its own unprivileged account, made per start (security-lessons F5): no
 # group of the webUI's or the sensors', so it can read neither config.yaml
 # nor the apply-helper socket. Model output is untrusted input; this
 # service only returns proposals.

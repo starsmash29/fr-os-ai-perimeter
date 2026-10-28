@@ -96,8 +96,8 @@
   <h4>Related controls</h4>
   <p class="ap-controls">{% for c in explanation.controls %}<span class="badge">{{ c }}</span> {% endfor %}</p>
   {% if explanation.nis2_note %}<p class="ap-callout"><span class="badge badge-blue">NIS2</span> {{ explanation.nis2_note }}</p>{% endif %}
-  {% if explanation.suggested_intent %}
-  <p class="ap-suggest">Suggested change, copied into the request box below: <em>{{ explanation.suggested_intent }}</em>. Nothing changes until you propose, review and save it.</p>
+  {% if explanation.suggested_intent_shown %}
+  <p class="ap-suggest">Suggested change, copied into the request box below under its pseudonym: <em>{{ explanation.suggested_intent_shown }}</em>. Nothing changes until you propose, review and save it.</p>
   {% endif %}
   {% else %}
   <h3>No explanation <span class="badge badge-red">refused</span></h3>

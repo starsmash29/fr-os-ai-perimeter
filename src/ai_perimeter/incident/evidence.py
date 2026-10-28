@@ -8,7 +8,7 @@ connections the kernel's eBPF/XDP filter dropped by server name. This module rea
 own loaders, in the webUI process that may already read them, and turns one
 device's share into an **evidence bundle** for ``fr-ai-assist``.
 
-Why it is built here and not by the model (FR_OS security-lessons A1, G11):
+Why it is built here and not by the model (FR_OS security-lessons F5, G11):
 
 - **The model gets no file, socket or network.** It only ever sees the
   bundle, and asks for slices of it (:mod:`.explain`).
@@ -38,6 +38,7 @@ from __future__ import annotations
 import collections
 import ipaddress
 import json
+import logging
 import math
 import re
 import time
@@ -48,10 +49,13 @@ from typing import Any
 from frfw import paths as fr_paths
 from frfw.adblock.dns_service import dnsmasq_message
 from frfw.ai_ids.daemon import load_recent_events
-from frfw.appid import AppMatcher, AppSignature, Catalog, load_catalog
+from frfw.appid import (AppMatcher, AppSignature, Catalog, CatalogError,
+                        load_catalog)
 from frfw.appid.daemon import load_usage
 from frfw.iot.scanner import load_inventory
 from frfw.tlsfp.daemon import load_state as load_tls_state
+
+log = logging.getLogger("fr-webui-ai")
 
 #: How far back the bundle looks.
 WINDOW_SECONDS = 24 * 3600
@@ -74,6 +78,13 @@ UPLOAD_ALERT_BYTES = 50 * 1024 * 1024
 #: Every upload total is "at least": a flow that opens and closes between
 #: two 15 s samples is not seen.
 UPLOAD_NOTE = "at least; closed short flows between samples are not seen"
+#: The largest upload.json read (review2 F1): the writer account is shared
+#: with FR_OS's parser daemons, so the privileged webUI never parses an
+#: unbounded file from it. Past this the ai_upload section is skipped, with
+#: a note in the log.
+UPLOAD_MAX_BYTES = 4 * 1024 * 1024
+#: At most this many upload rows are parsed (review2 F1).
+UPLOAD_MAX_ROWS = 50_000
 
 SECTIONS = ("ids_events", "ai_usage", "tls_fingerprints", "dns_summary", "sni_blocks", "ai_upload")
 ID_PREFIX = {"ids_events": "ids", "ai_usage": "ai", "tls_fingerprints": "tls", "dns_summary": "dns",
@@ -99,8 +110,16 @@ AI_SERVICES = (
 
 
 def ai_catalog() -> Catalog:
-    """FR_OS's ``ai`` apps first, then :data:`AI_SERVICES` they don't cover."""
-    fr_os = tuple(a for a in load_catalog().apps if a.category == "ai")
+    """FR_OS's ``ai`` apps first, then :data:`AI_SERVICES` they don't cover.
+    A catalog FR_OS itself cannot read (review2 C11) degrades to the
+    built-ins, with a note in the log: App-ID snapshot rows for FR_OS's
+    apps come out empty, but DNS and upload matching on the well-known
+    assistants keep working -- and the page still renders."""
+    try:
+        fr_os = tuple(a for a in load_catalog().apps if a.category == "ai")
+    except CatalogError as exc:
+        log.warning("App-ID catalog unreadable, using built-in AI services: %s", exc)
+        fr_os = ()
     known = {a.id for a in fr_os}
     extra = tuple(a for a in AI_SERVICES if a.id not in known)
     return Catalog(apps=fr_os + extra, source="frfw.appid + ai_perimeter", license="", ref="",
@@ -172,6 +191,11 @@ _DNS_REPLY_RE = re.compile(
 #: dnsmasq[489]: " (the same shape FR_OS's dnsmasq_message strips).
 _DNS_PREFIX_RE = re.compile(
     r"^(?P<stamp>[A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d) dnsmasq\[\d+\]: ")
+#: English month abbreviations for query-log stamps (review2 C10): parsed
+#: from this table, never with time.strptime %b, whose names follow the
+#: process locale.
+_MONTHS = {"Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+           "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12}
 
 
 def collect(sources: Sources = Sources(), *, now: float | None = None) -> dict[str, Signals]:
@@ -241,12 +265,19 @@ def collect(sources: Sources = Sources(), *, now: float | None = None) -> dict[s
 
     matcher = AppMatcher(catalog)
     replies: dict[str, dict[str, str]] = {}
-    _read_dns(sources.dns, client, matcher, names, now, replies)
+    cnames: dict[str, dict[str, str]] = {}
+    _read_dns(sources.dns, client, matcher, names, now, replies, cnames)
     _read_sni(sources.sni, client, now)
     ai_ids = {a.id for a in catalog.apps if a.category == "ai"}
-    _read_upload(sources.upload, upload_client, replies, matcher, ai_ids, names, now)
+    _read_upload(sources.upload, upload_client, replies, cnames, matcher, ai_ids, names, now)
 
-    inventory = load_inventory(sources.devices) or {}
+    try:
+        inventory = load_inventory(sources.devices) or {}
+    except (OSError, ValueError):
+        # Review2 C11: the IoT loader has no error class of its own, so a
+        # file it cannot read (permissions, decoding) arrives as these --
+        # skip the names, keep every section.
+        inventory = {}
     for device in inventory.get("devices", []) if isinstance(inventory.get("devices"), list) else []:
         if not isinstance(device, dict):
             continue
@@ -280,32 +311,37 @@ def _dns_ts(line: str, now: float) -> float | None:
     or None when the line carries none. dnsmasq logs no year, so the
     current one is assumed -- unless that lands in the future, in which
     case the line is from last December (a Dec 31 -> Jan 1 rollover).
-    Router-local time, like the rest of the bundle."""
+    Router-local time, like the rest of the bundle. The month comes from
+    the fixed English table above, not the locale (review2 C10)."""
     match = _DNS_PREFIX_RE.match(line)
     if match is None:
         return None
+    stamp = match.group("stamp")
     try:
-        parsed = time.strptime(match.group("stamp"), "%b %d %H:%M:%S")
-    except ValueError:
+        month = _MONTHS[stamp[0:3]]
+        day, hour, minute, second = (int(stamp[4:6]), int(stamp[7:9]),
+                                    int(stamp[10:12]), int(stamp[13:15]))
+    except (KeyError, ValueError):
         return None
     year = time.localtime(now).tm_year
-    ts = time.mktime((year, parsed.tm_mon, parsed.tm_mday,
-                      parsed.tm_hour, parsed.tm_min, parsed.tm_sec, 0, 0, -1))
+    ts = time.mktime((year, month, day, hour, minute, second, 0, 0, -1))
     if ts > now:
-        ts = time.mktime((year - 1, parsed.tm_mon, parsed.tm_mday,
-                          parsed.tm_hour, parsed.tm_min, parsed.tm_sec, 0, 0, -1))
+        ts = time.mktime((year - 1, month, day, hour, minute, second, 0, 0, -1))
     return ts
 
 
 def _read_dns(path: Path, client, matcher: AppMatcher, names: dict[str, str], now: float,
-            replies: dict[str, dict[str, str]]) -> None:
+            replies: dict[str, dict[str, str]],
+            cnames: dict[str, dict[str, str]]) -> None:
     """Query and NXDOMAIN counts per client, the names it looked up, AI
     services the App-ID snapshot didn't already report, and -- per client
-    -- the addresses its replies mapped names to (first reply wins), for
-    the upload attribution below. Only lines inside the 24 h window count:
-    older lines are skipped before they can count as fresh evidence, and
-    undated lines are skipped outright, so no row ever gets last_seen=now
-    for data without a time (review F6)."""
+    -- the addresses its replies mapped names to (first reply wins), plus
+    the CNAME each reply pointed at (first answer wins), so upload
+    attribution can follow a chain back to the queried name (review2 C9).
+    Only lines inside the 24 h window count: older lines are skipped
+    before they can count as fresh evidence, and undated lines are skipped
+    outright, so no row ever gets last_seen=now for data without a time
+    (review F6)."""
     since = now - WINDOW_SECONDS
     lookups: dict[tuple[str, str], list] = {}
     for line in _tail(path, DNS_TAIL_BYTES):
@@ -337,10 +373,20 @@ def _read_dns(path: Path, client, matcher: AppMatcher, names: dict[str, str], no
         reply = _DNS_REPLY_RE.match(message)
         if reply:
             s = client(reply.group("client"))
+            if s is None:
+                continue
+            name = reply.group("name").lower().rstrip(".")
             addr = _ip(reply.group("addr"))
-            if s is not None and addr is not None:
-                name = reply.group("name").lower().rstrip(".")
+            if addr is not None:
                 replies.setdefault(s.ip, {}).setdefault(addr, name)
+                continue
+            # Review2 C9: a CNAME answer ("reply chatgpt.com is
+            # <cdn-name>"): remembered per client, first wins, so the
+            # upload attribution can follow it back to the queried name.
+            # Dotted only: single tokens (NODATA-style) never form chains.
+            alias = reply.group("addr").lower().rstrip(".")
+            if alias and "." in alias:
+                cnames.setdefault(s.ip, {}).setdefault(alias, name)
     for (ip, app), (hits, first, last) in lookups.items():
         s = client(ip)
         if any(a["app"] == app for a in s.ai):
@@ -350,22 +396,65 @@ def _read_dns(path: Path, client, matcher: AppMatcher, names: dict[str, str], no
                      "active": None})
 
 
+#: How far a CNAME chain is followed per client (review2 C9).
+_CNAME_MAX_DEPTH = 8
+
+
+def _resolve_name(replies: dict[str, dict[str, str]], cnames: dict[str, dict[str, str]],
+                  client_ip: str, dst: str) -> str | None:
+    """The name a client's destination resolves to: its reply's name, then
+    up to ``_CNAME_MAX_DEPTH`` CNAME hops back toward the queried name
+    (review2 C9)."""
+    name = replies.get(client_ip, {}).get(dst)
+    if name is None:
+        return None
+    edges = cnames.get(client_ip, {})
+    for _ in range(_CNAME_MAX_DEPTH):
+        target = edges.get(name)
+        if target is None:
+            break
+        name = target
+    return name
+
+
 def _read_upload(path: Path, upload_client, replies: dict[str, dict[str, str]],
+                 cnames: dict[str, dict[str, str]],
                  matcher: AppMatcher, ai_ids: set[str], names: dict[str, str],
                  now: float) -> None:
     """Per-service upload bytes per client, from fr-ai-upload's totals. A
     row counts only when the client's own replies map its destination to a
-    name App-ID puts in the "ai" category; anything else -- another
-    client's reply, a non-AI name, a misshapen row -- is skipped. A missing
-    or broken file means no upload signal, never an error."""
+    name App-ID puts in the "ai" category -- directly, or through its
+    CNAME chain (review2 C9); anything else -- another client's reply, a
+    non-AI name, a misshapen row -- is skipped. A missing or broken file
+    means no upload signal, never an error, and so does a file over
+    ``UPLOAD_MAX_BYTES`` or past ``UPLOAD_MAX_ROWS`` rows, with a note in
+    the log (review2 F1)."""
     since = now - WINDOW_SECONDS
     try:
-        doc = json.loads(path.read_text())
-    except (OSError, ValueError):
+        if path.stat().st_size > UPLOAD_MAX_BYTES:
+            log.warning("upload totals %s is over %d bytes; skipping ai_upload",
+                        path, UPLOAD_MAX_BYTES)
+            return
+        with path.open("rb") as fh:
+            raw = fh.read(UPLOAD_MAX_BYTES + 1)
+    except OSError:
+        return
+    if len(raw) > UPLOAD_MAX_BYTES:
+        # Grew between the stat and the read: still skip (review2 F1).
+        log.warning("upload totals %s grew past %d bytes; skipping ai_upload",
+                    path, UPLOAD_MAX_BYTES)
+        return
+    try:
+        doc = json.loads(raw)
+    except ValueError:
         return
     rows = doc.get("devices") if isinstance(doc, dict) else None
     if not isinstance(rows, list):
         return
+    if len(rows) > UPLOAD_MAX_ROWS:
+        log.warning("upload totals %s holds %d rows; parsing the first %d",
+                    path, len(rows), UPLOAD_MAX_ROWS)
+        rows = rows[:UPLOAD_MAX_ROWS]
     acc: dict[tuple[str, str], tuple[Signals, dict[str, Any]]] = {}
     for row in rows:
         if not isinstance(row, dict):
@@ -376,7 +465,7 @@ def _read_upload(path: Path, upload_client, replies: dict[str, dict[str, str]],
         dst = _ip(row.get("dst"))
         if dst is None:
             continue
-        name = replies.get(s.ip, {}).get(dst)
+        name = _resolve_name(replies, cnames, s.ip, dst)
         if name is None:
             continue
         app = matcher.match(name)
@@ -542,15 +631,30 @@ _V4_RE = re.compile(r"(?<![\w])([0-9]{1,3}(?:\.[0-9]{1,3}){3})(?![\w])")
 #: A maximal run of what an IP address is written with (review F4).
 _TOKEN_RE = re.compile(r"[0-9A-Fa-f:.]+")
 _UNPRINTABLE_RE = re.compile(r"[^\x20-\x7e]")
+#: Unicode bidi controls (review2 C19): invisible characters that reorder
+#: displayed text. Stripped from every sensor- or model-made string that
+#: reaches the model or the admin's screen.
+_BIDI_RE = re.compile("[\u202a-\u202e\u2066-\u2069\u200e\u200f]")
+
+
+def strip_bidi_controls(text: str) -> str:
+    """Remove the Unicode bidi controls (review2 C19) -- U+202A..U+202E,
+    U+2066..U+2069, U+200E/U+200F -- which reorder displayed text and so
+    let an untrusted name spoof what the admin reads."""
+    return _BIDI_RE.sub("", text)
 
 
 def _scrub(value: Any, secrets: set[str]) -> str:
     """Untrusted sensor text, made safe to show a model: printable ASCII,
-    short, with no address and none of the device's own identifiers. A
-    secret of any length is scrubbed case-insensitively at token/domain
-    boundaries -- ``nas`` in ``nas.home``, but not inside ``canasta`` --
-    and addresses are parsed, not pattern-matched (review F4)."""
-    text = _UNPRINTABLE_RE.sub("?", str(value))[:MAX_TEXT * 2]
+    short, with no bidi controls (review2 C19), no address and none of the
+    device's own identifiers. A secret of any length is scrubbed
+    case-insensitively at token/domain boundaries -- ``nas`` in
+    ``nas.home``, but not inside ``canasta`` -- and addresses are parsed,
+    not pattern-matched (review F4)."""
+    # Review2 C19: bidi controls are stripped outright (not just "?"-ed
+    # with the other unprintables), so a crafted name cannot reorder what
+    # the model or the admin reads.
+    text = _UNPRINTABLE_RE.sub("?", strip_bidi_controls(str(value)))[:MAX_TEXT * 2]
     for secret in sorted(secrets, key=len, reverse=True):
         if not secret:
             continue
@@ -614,7 +718,9 @@ def _number(value: Any, now: float) -> float | None:
 
 
 def _count(value: Any) -> int | None:
-    """A sensor count in a sane range (review F10): ``0 <= n < 2**63``."""
+    """A sensor count in a sane range (review F10): ``0 <= n < 2**63`` --
+    the bound the upload collector saturates its totals at (review2 C6),
+    so a row it writes is a row this accepts."""
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     if not 0 <= value < 2**63:

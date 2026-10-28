@@ -430,3 +430,24 @@ def test_propose_patch_when_the_ai_perimeter_is_off(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_a_worsened_lint_message_is_not_masked_by_the_old_one():
+    """Review2 C20: findings dedupe by (rule, kind, message): rule x
+    shadowed first by 'a', then by the new rule 'b', is a new finding --
+    the admin sees what changed, not silence."""
+    before_raw = home()
+    before_raw["rules"] = [
+        {"name": "a", "action": "drop", "from_zone": "lan", "to_zone": "wan"},
+        {"name": "x", "action": "accept", "from_zone": "lan", "to_zone": "wan"},
+        *before_raw["rules"],
+    ]
+    clean, before = pipeline.current_config(before_raw)
+    answer = {"summary": "x", "operations": [
+        {"op": "add_rule", "position": "start",
+         "rule": {"name": "b", "action": "drop", "from_zone": "lan", "to_zone": "wan"}}]}
+    p = pipeline.evaluate(clean, before, patch_from_dict(answer))
+    assert p.status == pipeline.WARNINGS, p.problems
+    shadowed = [f for f in p.findings if (f["rule"], f["kind"]) == ("x", "shadowed")]
+    assert len(shadowed) == 1
+    assert "'b'" in shadowed[0]["message"]

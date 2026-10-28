@@ -9,7 +9,7 @@ ConditionPathExists=/etc/sysctl.d/60-ai-perimeter.conf
 
 [Service]
 Type=simple
-# FR_OS's sensor account (security-lessons A1): the helper allows that uid
+# FR_OS's sensor account (security-lessons F5): the helper allows that uid
 # FR_OS's SENSOR_COMMANDS, of which the collector uses only the read-only
 # conntrack_sample. Not a dynamic account: the uid must be fr_os-sensor for
 # the helper's peer check.

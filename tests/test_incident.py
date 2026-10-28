@@ -588,3 +588,123 @@ def test_malformed_upload_times_do_not_break_a4(sources):
     [item] = bundle["sections"]["ai_upload"]
     assert item["bytes_out"] == 60 * 1024 * 1024
     assert "ai_upload" in suspects(up, now=NOW)[0]["reasons"]
+
+
+def test_an_oversize_upload_file_is_skipped_with_a_note(sources, caplog):
+    """Review2 F1: upload.json over 4 MiB is skipped, with a note in the
+    log; the bundle still builds and no upload reason appears."""
+    path = sources.dns.with_name("upload.json")
+    path.write_bytes(b'{"generated": 1, "window_seconds": 86400, "devices": [], "pad": "'
+                     + b"x" * (5 * 1024 * 1024) + b'"}')
+    big = dataclasses.replace(sources, upload=path)
+    bundle, _ = build_bundle(TABLET_IP, big, now=NOW)
+    assert bundle["sections"]["ai_upload"] == []
+    assert "ai_upload" not in suspects(big, now=NOW)[0]["reasons"]
+    assert any("skipping ai_upload" in r.getMessage() for r in caplog.records)
+
+
+def test_sixty_thousand_upload_rows_still_build_the_bundle(sources):
+    """Review2 F1: 60 000 full rows trip the size cap; the bundle builds."""
+    rows = [upload_row(TABLET_IP, UPLOAD_DST, 10) for _ in range(60_000)]
+    up = with_upload(sources, rows)
+    bundle, _ = build_bundle(TABLET_IP, up, now=NOW)
+    assert bundle["sections"]["ai_upload"] == []
+
+
+def test_upload_rows_are_capped_at_fifty_thousand(sources, monkeypatch):
+    """Review2 F1: at most UPLOAD_MAX_ROWS rows are parsed (the cap is
+    lowered for the test: full rows would trip the size cap first)."""
+    monkeypatch.setattr(evidence, "UPLOAD_MAX_ROWS", 3)
+    rows = [upload_row(TABLET_IP, UPLOAD_DST, 10 * (n + 1)) for n in range(5)]
+    up = with_upload(sources, rows)
+    bundle, _ = build_bundle(TABLET_IP, up, now=NOW)
+    [item] = bundle["sections"]["ai_upload"]
+    assert (item["bytes_out"], item["flows"]) == (60, 3)
+
+
+def test_a_corrupt_catalog_degrades_to_built_in_ai_services(sources, monkeypatch, caplog):
+    """Review2 C11: FR_OS's catalog unreadable -> its snapshot rows come
+    out empty, the built-ins still match, the bundle builds, and the log
+    notes the degradation."""
+    from frfw.appid import CatalogError
+
+    def boom():
+        raise CatalogError("signature catalog must be an object")
+
+    monkeypatch.setattr(evidence, "load_catalog", boom)
+    bundle, _ = build_bundle(TABLET_IP, sources, now=NOW)
+    services = [a["service"] for a in bundle["sections"]["ai_usage"]]
+    assert "ChatGPT / OpenAI" not in services
+    assert "Anthropic Claude" in services, "built-in DNS matching survives"
+    rows = {r["ip"]: r for r in suspects(sources, now=NOW)}
+    assert "ChatGPT / OpenAI" not in rows[TABLET_IP]["ai_services"]
+    assert any("catalog" in r.getMessage().lower() for r in caplog.records)
+
+
+def test_an_unreadable_inventory_skips_names_not_sections(sources):
+    """Review2 C11: the IoT loader has no error of its own -- undecodable
+    bytes arrive as ValueError; the names are skipped, the sections stay."""
+    sources.devices.write_bytes(b"\xff\xff not json \xfe")
+    bundle, _ = build_bundle(TABLET_IP, sources, now=NOW)
+    assert bundle["sections"]["ids_events"] != []
+    [row] = suspects(sources, now=NOW)
+    assert row["ip"] == TABLET_IP and row["name"] == ""
+
+
+def test_dns_timestamps_use_english_months():
+    """Review2 C10: the month comes from a fixed English table."""
+    line = ("Oct 28 23:38:00 dnsmasq[812]: 1 192.168.10.21/40001 "
+            "query[A] x.example from 192.168.10.21")
+    assert evidence._dns_ts(line, NOW) == time.mktime((2026, 10, 28, 23, 38, 0, 0, 0, -1))
+    assert evidence._dns_ts(line.replace("Oct", "Okt"), NOW) is None
+
+
+def test_dns_timestamps_ignore_a_non_english_locale():
+    """Review2 C10: under a non-English LC_TIME the same line still
+    parses; skipped when no such locale exists here."""
+    import locale
+    for candidate in ("de_DE.UTF-8", "de_DE.utf8", "hu_HU.UTF-8", "fr_FR.UTF-8"):
+        try:
+            previous = locale.setlocale(locale.LC_TIME)
+            locale.setlocale(locale.LC_TIME, candidate)
+        except locale.Error:
+            continue
+        break
+    else:
+        pytest.skip("no non-English locale available")
+    try:
+        line = ("Oct 28 23:38:00 dnsmasq[812]: 1 192.168.10.21/40001 "
+                "query[A] x.example from 192.168.10.21")
+        assert evidence._dns_ts(line, NOW) == time.mktime((2026, 10, 28, 23, 38, 0, 0, 0, -1))
+    finally:
+        locale.setlocale(locale.LC_TIME, previous)
+
+
+def test_cname_chain_attributes_upload_to_the_original_query(sources):
+    """Review2 C9: reply chatgpt.com is <cdn-a>, reply <cdn-a> is <cdn-b>,
+    reply <cdn-b> is <ip>: the upload to <ip> attributes to ChatGPT. The
+    TV's own chain maps nothing for the tablet (per-client edges)."""
+    rows = [upload_row(TABLET_IP, UPLOAD_DST, 60 * 1024 * 1024)]
+    up = with_upload(sources, rows, replies=())
+    stamp = time.strftime("%b %d %H:%M:%S", time.localtime(NOW - 100))
+    lines = up.dns.read_text().splitlines()
+    lines += [
+        f"{stamp} dnsmasq[812]: 600 {TABLET_IP}/40600 reply chatgpt.com is chatgpt-a.example.net",
+        f"{stamp} dnsmasq[812]: 601 {TABLET_IP}/40601 reply chatgpt-a.example.net is chatgpt-b.example.net",
+        f"{stamp} dnsmasq[812]: 602 {TABLET_IP}/40602 reply chatgpt-b.example.net is {UPLOAD_DST}",
+        f"{stamp} dnsmasq[812]: 603 {TV_IP}/40603 reply chatgpt.com is tv-cdn.example.net",
+        f"{stamp} dnsmasq[812]: 604 {TV_IP}/40604 reply tv-cdn.example.net is {UPLOAD_TV_DST}",
+    ]
+    up.dns.write_text("\n".join(lines) + "\n")
+    bundle, _ = build_bundle(TABLET_IP, up, now=NOW)
+    [item] = bundle["sections"]["ai_upload"]
+    assert item["service"] == "ChatGPT / OpenAI"
+    assert item["bytes_out"] == 60 * 1024 * 1024
+
+
+def test_strip_bidi_controls_removes_the_listed_ranges():
+    """Review2 C19: every listed control is stripped, plain text untouched."""
+    text = ("a\u202ab\u202bc\u202cd\u202de\u202ef\u2066g\u2067h\u2068i\u2069j"
+            "\u200ek\u200fl")
+    assert evidence.strip_bidi_controls(text) == "abcdefghijkl"
+    assert evidence.strip_bidi_controls("plain - text 123") == "plain - text 123"

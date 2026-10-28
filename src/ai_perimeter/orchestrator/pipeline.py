@@ -140,10 +140,13 @@ def evaluate(before_raw: dict[str, Any], before: Config, patch: Patch, *,
         return proposal
 
     now = time.time() if now is None else now
-    known = {(f.rule, f.kind) for f in lint(before, hits={}, now=now)}
+    # Review2 C20: new means a new (rule, kind, message) -- a finding of
+    # the same kind with a changed message (shadowed by another rule now)
+    # is news, not the old row.
+    known = {(f.rule, f.kind, f.message) for f in lint(before, hits={}, now=now)}
     proposal.findings = [
         {"rule": f.rule, "kind": f.kind, "severity": f.severity, "message": f.message}
-        for f in lint(after, hits={}, now=now) if (f.rule, f.kind) not in known
+        for f in lint(after, hits={}, now=now) if (f.rule, f.kind, f.message) not in known
     ]
     if any(f["severity"] == WARNING for f in proposal.findings):
         proposal.status = WARNINGS

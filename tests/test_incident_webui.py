@@ -54,8 +54,13 @@ def test_explain_then_propose_the_suggested_change(screen):
     assert f"From 23:00 kids-tablet ({TABLET_IP}) looked up ChatGPT" in text
     assert "NIS2 Art. 21(2)(b): incident handling" in text
     assert "NIST SP 800-53 SI-4" in text
-    # The suggestion lands in the request box, with the real name.
-    assert f"Cut kids-tablet ({TABLET_IP}) off the internet from 22:00 to 06:00</textarea>" in text
+    # Review2 F2: the request box keeps the pseudonym (proposing sends it
+    # to the model); the real name shows only in the suggestion line above.
+    box = text.split("<textarea")[1].split("</textarea>")[0]
+    assert "Cut device-1 off the internet from 22:00 to 06:00" in box
+    for secret in (TABLET_IP, TABLET_MAC, "kids-tablet"):
+        assert secret not in box
+    assert f"Cut kids-tablet ({TABLET_IP}) off the internet from 22:00 to 06:00" in text
     # The model never saw who the device is.
     sent = json.dumps([r["json"] for r in screen["provider"].requests])
     for secret in (TABLET_IP, TABLET_MAC, "kids-tablet"):
@@ -176,7 +181,12 @@ def test_the_office_scenario_end_to_end(env, tmp_path):  # noqa: F811
     assert "The severity was raised to what the evidence alone shows." in text
     assert "early warning to the CSIRT within 24 hours" in text
     assert "<code>tls-1</code>" in page.text and "update-cdn-checker.example" in text
-    assert f"Cut design-laptop ({LAPTOP_IP}) off the internet</textarea>" in text
+    # Review2 F2: the box keeps the pseudonym; the real name is shown above it.
+    box = text.split("<textarea")[1].split("</textarea>")[0]
+    assert "Cut device-1 off the internet" in box
+    for secret in (LAPTOP_IP, LAPTOP_MAC, "design-laptop"):
+        assert secret not in box
+    assert f"Cut design-laptop ({LAPTOP_IP}) off the internet" in text
     sent = json.dumps([r["json"] for r in env["provider"].requests])
     assert "Azarus Group loader" in sent  # the feed's label is evidence
     for secret in (LAPTOP_IP, LAPTOP_MAC, "design-laptop"):
@@ -198,7 +208,12 @@ def test_the_office_file_server_reads_as_dga_and_scan(env, tmp_path):  # noqa: F
     text = html.unescape(page.text)
     assert ">high</span>" in text
     assert "The severity was raised" not in text
-    assert f"Cut nas ({NAS_IP}) off the internet</textarea>" in text
+    # Review2 F2: the box keeps the pseudonym; the real name is shown above it.
+    box = text.split("<textarea")[1].split("</textarea>")[0]
+    assert "Cut device-1 off the internet" in box
+    for secret in (NAS_IP, NAS_MAC, "nas ("):
+        assert secret not in box
+    assert f"Cut nas ({NAS_IP}) off the internet" in text
     sent = json.dumps([r["json"] for r in env["provider"].requests])
     assert "DGA-like NXDOMAIN lookups" in sent and "destination-scan pattern" in sent
     for secret in (NAS_IP, NAS_MAC):
@@ -229,3 +244,56 @@ def test_the_office_laptop_cites_the_kernels_sni_drops(env, tmp_path):  # noqa: 
     for secret in (LAPTOP_IP, LAPTOP_MAC, "design-laptop", "203.0.113.10",
                    "office-portal.example"):
         assert secret not in sent
+
+
+def test_a_corrupt_catalog_still_renders_the_page(screen, sources, monkeypatch):
+    """Review2 C11: the suspects page renders (200) with a corrupt catalog,
+    degraded to the built-in AI services."""
+    from frfw.appid import CatalogError
+
+    def boom():
+        raise CatalogError("signature catalog must be an object")
+
+    monkeypatch.setattr("ai_perimeter.incident.evidence.load_catalog", boom)
+    page = login(screen).get("/ai-perimeter")
+    assert page.status_code == 200
+    assert "What did the router see?" in page.text
+    assert "kids-tablet" in page.text
+
+
+def test_bidi_controls_are_stripped_from_names_and_sensor_text(screen, sources):
+    """Review2 C19: a U+202E in a device name, a sensor reason and the
+    model's own title/summary reaches neither the model payload nor the
+    rendered page; the text itself still shows."""
+    sources.devices.write_text(json.dumps({"devices": [
+        {"mac": TABLET_MAC, "ip": TABLET_IP, "hostname": "kid\u202es-tablet",
+         "category": "tablet"}]}))
+    ids = json.loads(sources.ids.read_text())
+    ids[0]["reasons"].append("talking to evil\u202e.example")
+    sources.ids.write_text(json.dumps(ids))
+    screen["provider"].queue = [tool("ids_events"),
+                                answer(title="Hi\u202ethere",
+                                       summary="device-1\u202e did things at night.")]
+    page = post(login(screen), "/ai-perimeter/explain", {"ip": TABLET_IP})
+    assert page.status_code == 200
+    assert "\u202e" not in page.text
+    sent = json.dumps([r["json"] for r in screen["provider"].requests])
+    assert "\u202e" not in sent
+    assert "evil.example" in sent
+    text = html.unescape(page.text)
+    assert "kids-tablet" in text and "Hithere" in text
+
+
+def test_suggested_intent_keeps_the_pseudonym_for_the_model():
+    """Review2 F2: the model-bound suggestion keeps device-1; the real name
+    is substituted only in the admin-rendered twin."""
+    from ai_perimeter.webui.routes import _explanation
+    view = _explanation(
+        {"status": "ready", "title": "t", "severity": "low", "summary": "s",
+         "evidence": [], "suggested_intent": "Cut device-1 off the internet"},
+        {"sections": {"ai_usage": []}},
+        {"device-1": f"kids-tablet ({TABLET_IP})"})
+    assert view["suggested_intent"] == "Cut device-1 off the internet"
+    assert view["suggested_intent_shown"] == f"Cut kids-tablet ({TABLET_IP}) off the internet"
+    for secret in ("kids-tablet", TABLET_IP, TABLET_MAC):
+        assert secret not in view["suggested_intent"]

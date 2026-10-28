@@ -5,7 +5,7 @@ pseudonymised device, how many items each section holds and their ids. It
 may then ask for whole sections, one per step, at most :data:`MAX_STEPS`
 times, and answers with one JSON object. The "tools" are lookups in the
 bundle the webUI already built: no file, socket, network or helper is
-reachable from here, whatever the model asks (FR_OS security-lessons A1).
+reachable from here, whatever the model asks (FR_OS security-lessons F5).
 The loop is plain JSON in the chat, so it works the same with every
 provider, a local llama.cpp server included.
 
