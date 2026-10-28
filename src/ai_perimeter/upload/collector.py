@@ -23,7 +23,9 @@ A1, I1, F1):
 
 The totals are written every sample, atomically (temp file + rename, mode
 0640), to :data:`OUTPUT_PATH`, where the webUI's evidence builder
-(:mod:`ai_perimeter.incident.evidence`) reads them. The byte counters only
+(:mod:`ai_perimeter.incident.evidence`) reads them. Each row keys by source
+IP (``device``), with the helper's ``src_mac`` alongside as an optional
+``mac`` field when there was one (review F5). The byte counters only
 exist when the router opted into ``net.netfilter.nf_conntrack_acct=1`` and
 the ``conntrack-bytes`` FR_OS patch; without them every sample reports 0
 and the file stays empty, by design.
@@ -53,6 +55,12 @@ INTERVAL_SECONDS = 15
 WINDOW_SECONDS = 24 * 3600
 #: At most this many (device, dst) pairs; the stalest is dropped first.
 MAX_PAIRS = 4096
+#: How long a vanished flow's last counters are remembered, so a flow
+#: missing from one truncated sample is not recounted in full when it
+#: reappears (review F9). At most :data:`MAX_GONE` flows, the oldest
+#: dropped first.
+GONE_REMEMBER_SECONDS = 3600
+MAX_GONE = 65536
 #: Where the totals live (systemd StateDirectory=fr_os-ai-perimeter).
 OUTPUT_PATH = Path("/var/lib/fr_os-ai-perimeter/upload.json")
 
@@ -112,6 +120,7 @@ class _Totals:
 class _Flow:
     key: tuple
     device: str
+    mac: str
     dst: str
     bytes_out: int
     bytes_in: int
@@ -156,9 +165,12 @@ def _parse_flow(flow: Any) -> _Flow | None:
     mac = flow.get("src_mac")
     if not _is_lan(src, mac):
         return None
-    device = mac if isinstance(mac, str) and mac else src
+    # Review F5: rows key by source IP, always -- a MAC-labelled IPv6
+    # source used to be keyed by MAC and lose its address. The MAC rides
+    # along as a separate field for attribution fallback (evidence F5).
     return _Flow(key=(proto, src, flow["sport"], dst, flow["dport"]),
-                device=device, dst=dst, bytes_out=out, bytes_in=inn)
+                device=src, mac=mac if isinstance(mac, str) and mac else "",
+                dst=dst, bytes_out=out, bytes_in=inn)
 
 
 class Collector:
@@ -174,6 +186,10 @@ class Collector:
         self._totals: dict[tuple[str, str], _Totals] = {}
         self._baseline_done = False
         self._counted: set[tuple] = set()
+        #: Vanished flows' last counters: key -> (bytes_out, bytes_in, ts).
+        self._gone: dict[tuple, tuple[int, int, float]] = {}
+        #: Latest MAC seen per pair, for the rows (review F5).
+        self._macs: dict[tuple[str, str], str] = {}
 
     def sample(self) -> None:
         """One round trip: ask, count, write. Never raises."""
@@ -194,19 +210,42 @@ class Collector:
         full current bytes are counted, its pair's entry is created then,
         and its flow is counted once. Later growth of a known flow is
         added as a delta, once. A flow that disappears had everything
-        seen added already, so forgetting it adds nothing twice."""
+        seen added already, so forgetting it adds nothing twice -- but its
+        last counters are remembered for an hour, so when a truncated
+        sample drops a flow and the next one shows it again, only its
+        growth over the remembered value is counted, never its lifetime
+        total again (review F9)."""
         seen: dict[tuple, _Flow] = {}
         for flow in flows:
             parsed = _parse_flow(flow)
             if parsed is not None:
                 seen[parsed.key] = parsed
         first = not self._baseline_done
+        remember_cutoff = now - GONE_REMEMBER_SECONDS
+        self._gone = {k: v for k, v in self._gone.items() if v[2] >= remember_cutoff}
         for key, flow in seen.items():
             prev = self._last.get(key)
             self._last[key] = (flow.bytes_out, flow.bytes_in)
             pair = (flow.device, flow.dst)
+            if flow.mac:
+                self._macs[pair] = flow.mac
             if prev is None:
                 if first:
+                    continue
+                remembered = self._gone.pop(key, None)
+                if remembered is not None:
+                    # Back after a gap: only growth over what was last
+                    # seen. A reset counter (a smaller value) adds 0, and
+                    # the flow was counted when first seen, so no new flow.
+                    out = max(0, flow.bytes_out - remembered[0])
+                    inn = max(0, flow.bytes_in - remembered[1])
+                    self._counted.add(key)
+                    if not out and not inn:
+                        continue
+                    entry = self._totals.get(pair)
+                    if entry is None:
+                        entry = self._totals[pair] = _Totals()
+                    entry.add(now, out, inn, False)
                     continue
                 entry = self._totals.get(pair)
                 if entry is None:
@@ -225,28 +264,42 @@ class Collector:
             entry.add(now, out, inn, new_flow)
             self._counted.add(key)
         for key in set(self._last) - set(seen):
-            del self._last[key]
+            vanished = self._last.pop(key)
             self._counted.discard(key)
+            # Remember the last counters for an hour (review F9), oldest
+            # dropped first so the set stays bounded (I1).
+            self._gone.pop(key, None)
+            if len(self._gone) >= MAX_GONE:
+                self._gone.pop(next(iter(self._gone)))
+            self._gone[key] = (vanished[0], vanished[1], now)
         self._baseline_done = True
 
     def write(self, now: float) -> None:
         """Age out, bound, and write the totals atomically (temp file +
-        rename, mode 0640). Buckets older than the window are dropped per
-        pair, so the file reports the sum of the buckets still kept."""
+        rename, mode 0640). A bucket whose first sample is older than the
+        window is dropped whole -- even if its last sample is still inside
+        it -- so a partially expired bucket never overstates the 24 h
+        total, and every total stays "at least" (review F8)."""
         cutoff = now - WINDOW_SECONDS
         for pair, totals in list(self._totals.items()):
-            for hour in [h for h, b in totals.buckets.items() if b.last < cutoff]:
+            for hour in [h for h, b in totals.buckets.items() if b.first < cutoff]:
                 del totals.buckets[hour]
             if not totals.buckets:
                 del self._totals[pair]
+                self._macs.pop(pair, None)
         while len(self._totals) > MAX_PAIRS:
             oldest = min(self._totals, key=lambda p: (self._totals[p].last,
                                                      self._totals[p].first))
             del self._totals[oldest]
-        devices = [{"device": device, "dst": dst, "bytes_out": t.bytes_out,
-                    "bytes_in": t.bytes_in, "flows": t.flows,
-                    "first": int(t.first), "last": int(t.last)}
-                   for (device, dst), t in sorted(self._totals.items())]
+            self._macs.pop(oldest, None)
+        devices = []
+        for (device, dst), t in sorted(self._totals.items()):
+            row = {"device": device, "dst": dst, "bytes_out": t.bytes_out,
+                   "bytes_in": t.bytes_in, "flows": t.flows,
+                   "first": int(t.first), "last": int(t.last)}
+            if (device, dst) in self._macs:
+                row["mac"] = self._macs[(device, dst)]
+            devices.append(row)
         payload = {"generated": int(now), "window_seconds": WINDOW_SECONDS,
                    "devices": devices}
         self._output.parent.mkdir(parents=True, exist_ok=True)
@@ -266,6 +319,11 @@ class Collector:
     def pairs(self) -> dict[tuple[str, str], _Totals]:
         """The live totals, for tests."""
         return self._totals
+
+    @property
+    def remembered(self) -> int:
+        """Vanished flows still remembered, for tests (review F9)."""
+        return len(self._gone)
 
 
 def main(argv: list[str] | None = None) -> int:

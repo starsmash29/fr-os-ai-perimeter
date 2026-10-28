@@ -136,8 +136,12 @@ def test_only_lan_sources_count(tmp_path):
               {"ok": True, "flows": grown}]
     collector, server = run(tmp_path, script, lambda: now[0])
     pairs = by_pair(read(tmp_path))
-    assert set(pairs) == {(LAN, WAN), ("02:00:00:00:10:01", WAN), ("fd00::7", WAN)}
+    # Review F5: rows key by source IP, always -- the MAC-labelled IPv6
+    # source keeps its address, with the MAC alongside.
+    assert set(pairs) == {(LAN, WAN), ("2001:db8::5", WAN), ("fd00::7", WAN)}
     assert pairs[(LAN, WAN)]["bytes_out"] == 10
+    assert pairs[("2001:db8::5", WAN)]["mac"] == "02:00:00:00:10:01"
+    assert "mac" not in pairs[(LAN, WAN)]
     server.shutdown()
     server.server_close()
 
@@ -319,3 +323,122 @@ def test_main_takes_one_sample_with_once(tmp_path):
     assert json.loads(out.read_text())["devices"] == []
     server.shutdown()
     server.server_close()
+
+
+def direct(tmp_path: Path) -> Collector:
+    """A collector driven by update()/write() directly: no socket, so the
+    review tests below run anywhere."""
+    return Collector(socket_path=tmp_path / "helper.sock",
+                     output=tmp_path / "upload.json", clock=lambda: 0.0)
+
+
+def test_upload_totals_are_readable_by_webui_not_other_users(tmp_path):
+    """Review F1, as a unit/mode-level test (no real users in CI): the
+    totals file is 0640, and the unit runs it group-readable under FR_OS's
+    shared feeds group, whose members are the webUI and the sensor."""
+    from test_systemd_units import one, section
+    collector = direct(tmp_path)
+    collector.update([], 10000.0)
+    collector.update([flow(out=100, inn=10)], 10015.0)
+    collector.write(10015.0)
+    out = tmp_path / "upload.json"
+    assert stat.S_IMODE(out.stat().st_mode) == 0o640
+    unit = section("fr-ai-upload.service", "[Service]")
+    assert one(unit, "Group") == "fr_os-feeds"
+    assert one(unit, "User") == "fr_os-sensor"
+
+
+def test_ipv6_flow_row_keeps_source_ip_and_mac(tmp_path):
+    """Review F5: a MAC-labelled IPv6 source is keyed by its IP, with the
+    MAC as a separate field -- the address is not lost."""
+    collector = direct(tmp_path)
+    collector.update([], 10000.0)
+    collector.update([flow(src="2001:db8::5", dst=WAN, out=100, inn=10,
+                           src_mac="02:00:00:00:10:01")], 10015.0)
+    collector.write(10015.0)
+    [row] = read(tmp_path)["devices"]
+    assert row["device"] == "2001:db8::5"
+    assert row["mac"] == "02:00:00:00:10:01"
+    assert (row["bytes_out"], row["bytes_in"], row["flows"]) == (100, 10, 1)
+
+
+def test_partial_boundary_bucket_never_overstates_24h_bytes(tmp_path):
+    """Review F8: a bucket whose first sample slid out of the window is
+    dropped whole, even though its last sample is still inside -- the 24 h
+    total stays "at least", never overstated."""
+    collector = direct(tmp_path)
+    collector.update([], 360000.0)
+    collector.update([flow(out=60_000_000, inn=0)], 360001.0)
+    collector.update([flow(out=60_000_001, inn=0)], 363599.0)
+    collector.write(446402.0)
+    assert read(tmp_path)["devices"] == []
+
+
+def test_truncated_sample_reappearance_does_not_recount_lifetime_bytes(tmp_path):
+    """Review F9: a flow missing from one truncated sample and back at the
+    same counters adds nothing: [], [flow 1000], [], [same flow 1000]."""
+    collector = direct(tmp_path)
+    t0 = 200000.0
+    collector.update([], t0)
+    collector.update([flow(out=1000, inn=0)], t0 + 15)
+    collector.update([], t0 + 30)
+    assert collector.remembered == 1
+    collector.update([flow(out=1000, inn=0)], t0 + 45)
+    collector.write(t0 + 45)
+    row = by_pair(read(tmp_path))[(LAN, WAN)]
+    assert row["bytes_out"] == 1000, "the lifetime total was not counted again"
+    assert row["flows"] == 1
+
+
+def test_reappearing_flow_counts_only_growth_over_remembered_value(tmp_path):
+    """Review F9: a flow back 50 bytes up adds 50, not its lifetime."""
+    collector = direct(tmp_path)
+    t0 = 210000.0
+    collector.update([], t0)
+    collector.update([flow(out=1000, inn=0)], t0 + 15)
+    collector.update([], t0 + 30)
+    collector.update([flow(out=1050, inn=0)], t0 + 45)
+    collector.write(t0 + 45)
+    row = by_pair(read(tmp_path))[(LAN, WAN)]
+    assert row["bytes_out"] == 1050
+    assert row["flows"] == 1
+
+
+def test_reappearing_flow_with_reset_counter_adds_nothing(tmp_path):
+    """Review F9: a flow back at a smaller counter (a reset) adds 0."""
+    collector = direct(tmp_path)
+    t0 = 220000.0
+    collector.update([], t0)
+    collector.update([flow(out=1000, inn=0)], t0 + 15)
+    collector.update([], t0 + 30)
+    collector.update([flow(out=900, inn=0)], t0 + 45)
+    collector.update([flow(out=950, inn=0)], t0 + 60)
+    collector.write(t0 + 60)
+    row = by_pair(read(tmp_path))[(LAN, WAN)]
+    assert row["bytes_out"] == 1050, "0 for the reset, then 50 of growth"
+
+
+def test_remembered_flows_stay_bounded(tmp_path):
+    """Review F9: at most MAX_GONE vanished flows are remembered."""
+    from ai_perimeter.upload.collector import MAX_GONE
+    collector = direct(tmp_path)
+    t0 = 230000.0
+    many = [flow(sport=10000 + n, out=10, inn=0) for n in range(MAX_GONE + 100)]
+    collector.update([], t0)
+    collector.update(many, t0 + 15)
+    collector.update([], t0 + 30)
+    assert collector.remembered == MAX_GONE
+
+
+def test_flow_forgotten_after_an_hour_counts_as_new(tmp_path):
+    """Review F9: the memory lasts an hour -- a flow back later is a new
+    flow, counted in full."""
+    collector = direct(tmp_path)
+    t0 = 240000.0
+    collector.update([], t0)
+    collector.update([flow(out=1000, inn=0)], t0 + 15)
+    collector.update([], t0 + 30)
+    collector.update([flow(out=1000, inn=0)], t0 + 30 + 3600 + 1)
+    collector.write(t0 + 30 + 3600 + 1)
+    row = by_pair(read(tmp_path))[(LAN, WAN)]
+    assert (row["bytes_out"], row["flows"]) == (2000, 2)

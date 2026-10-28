@@ -123,3 +123,161 @@ def test_the_bundled_patch_is_the_integration_patch(bundle):
     _tarball, root = bundle
     bundled = (root / "patches" / "conntrack-bytes.patch").read_bytes()
     assert bundled == (ROOT / "integration" / "fr_os" / "conntrack-bytes.patch").read_bytes()
+
+
+def _function_body(name: str) -> str:
+    """The lines of `name() { ... }` in install.sh."""
+    lines = (INSTALLER / "install.sh").read_text().splitlines()
+    start = next(i for i, line in enumerate(lines) if line == f"{name}() {{")
+    end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+    return "\n".join(lines[start:end])
+
+
+def test_install_restarts_the_helper_after_patching_it():
+    """Review F2: the install path applies the patch, then restarts the
+    running helper (which would otherwise keep the unpatched code), then
+    checks one sample for bytes_out."""
+    body = _function_body("install_upload_bytes")
+    patch_at = body.index("patch -p1")
+    restart_at = body.index("try-restart fr-apply-helper.service")
+    check_at = body.index("sample_kind")
+    assert patch_at < restart_at < check_at
+
+
+def test_uninstall_restarts_the_helper_after_reverting_the_patch():
+    """Review F2: the uninstall path reverts the patch, then restarts the
+    running helper, then checks what it reports now."""
+    body = _function_body("remove_upload_bytes")
+    revert_at = body.index("patch -R")
+    restart_at = body.index("try-restart fr-apply-helper.service")
+    check_at = body.index("sample_kind")
+    assert revert_at < restart_at < check_at
+
+
+def _upload_fakes(tmp_path, *, conntrack_has_bytes_out, acct_value, probe="empty"):
+    """A fake router corner for install_upload_bytes/remove_upload_bytes:
+    the bundle layout, a fake frfw tree, and fake sysctl/systemctl/patch/
+    chown/python on PATH. install.sh is sourced with --help (which only
+    prints usage), its paths are repointed at tmp, and one function runs."""
+    root = tmp_path / "router"
+    fakebin = root / "bin"
+    fakebin.mkdir(parents=True)
+    (fakebin / "sysctl").write_text(
+        "#!/bin/sh\n"
+        'echo "$*" >> "$FAKE_SYSCTL_CALLS"\n'
+        'case "$1" in\n'
+        '  -n) cat "$FAKE_SYSCTL_STATE" ;;\n'
+        '  -w) value=${2#*=}; printf "%s" "$value" > "$FAKE_SYSCTL_STATE" ;;\n'
+        "esac\n")
+    (fakebin / "systemctl").write_text(
+        "#!/bin/sh\n"
+        'echo "$*" >> "$FAKE_SYSTEMCTL_CALLS"\n'
+        "exit 0\n")
+    (fakebin / "fake-python").write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        '  *dirname*) printf "%s\\n" "$FAKE_FRFW/frfw" ;;\n'
+        '  *conntrack_sample*) printf "%s\\n" "${PROBE_RESULT:-empty}" ;;\n'
+        "  *) exit 0 ;;\n"
+        "esac\n")
+    (fakebin / "patch").write_text(
+        "#!/bin/sh\n"
+        'echo "$*" >> "$FAKE_PATCH_CALLS"\n'
+        "exit 0\n")
+    (fakebin / "chown").write_text("#!/bin/sh\nexit 0\n")
+    for script in fakebin.iterdir():
+        script.chmod(0o755)
+    frfw = root / "frfwroot" / "frfw"
+    frfw.mkdir(parents=True)
+    (frfw / "conntrack.py").write_text(
+        "# fake frfw\nbytes_out = 0\n" if conntrack_has_bytes_out else "# fake frfw\n")
+    bundle = root / "bundle"
+    (bundle / "systemd").mkdir(parents=True)
+    shutil.copyfile(ROOT / "systemd" / "fr-ai-upload.service",
+                    bundle / "systemd" / "fr-ai-upload.service")
+    (bundle / "patches").mkdir()
+    shutil.copyfile(ROOT / "integration" / "fr_os" / "conntrack-bytes.patch",
+                    bundle / "patches" / "conntrack-bytes.patch")
+    (root / "units").mkdir()
+    (root / "state").write_text(acct_value)
+    for name in ("sysctl-calls", "systemctl-calls", "patch-calls"):
+        (root / name).write_text("")
+    env = dict(os.environ, PATH=f"{fakebin}{os.pathsep}{os.environ['PATH']}",
+               FAKE_FRFW=str(root / "frfwroot"), PROBE_RESULT=probe,
+               FAKE_SYSCTL_STATE=str(root / "state"),
+               FAKE_SYSCTL_CALLS=str(root / "sysctl-calls"),
+               FAKE_SYSTEMCTL_CALLS=str(root / "systemctl-calls"),
+               FAKE_PATCH_CALLS=str(root / "patch-calls"),
+               INSTALL_SH=str(INSTALLER / "install.sh"),
+               BUNDLE=str(bundle), ROOT_FAKE=str(root))
+    return root, env
+
+
+def _run_upload_fn(root, env, function):
+    driver = root / "driver.sh"
+    driver.write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "set -- --help\n"
+        '. "$INSTALL_SH" > /dev/null\n'
+        'HERE="$BUNDLE"\n'
+        'PATCH="$BUNDLE/patches/conntrack-bytes.patch"\n'
+        'UNITS_DIR="$ROOT_FAKE/units"\n'
+        'SYSCTL_CONF="$ROOT_FAKE/sysctl.conf"\n'
+        'UPLOAD_OWNED="$ROOT_FAKE/owned"\n'
+        'PYTHON="$ROOT_FAKE/bin/fake-python"\n'
+        f"{function}\n")
+    return subprocess.run(["sh", str(driver)], capture_output=True, text=True, env=env)
+
+
+def test_default_uninstall_preserves_existing_conntrack_accounting(tmp_path):
+    """Review F11: without the opt-in marker, uninstall removes the unit
+    but never touches the sysctl -- accounting it did not own stays."""
+    root, env = _upload_fakes(tmp_path, conntrack_has_bytes_out=False, acct_value="1")
+    (root / "units" / "fr-ai-upload.service").write_text("unit")
+    (root / "sysctl.conf").write_text("conf")
+    result = _run_upload_fn(root, env, "remove_upload_bytes")
+    assert result.returncode == 0, result.stderr
+    assert not (root / "units" / "fr-ai-upload.service").exists()
+    assert not (root / "sysctl.conf").exists()
+    assert (root / "sysctl-calls").read_text() == "", "sysctl was never called"
+    assert (root / "state").read_text() == "1"
+    assert (root / "patch-calls").read_text() == "", "nothing to revert"
+
+
+@pytest.mark.parametrize("before", ["0", "1"])
+def test_opt_in_round_trip_restores_conntrack_accounting(tmp_path, before):
+    """Review F11: --with-upload-bytes records the prior value (root-only
+    0600 marker) before changing it, and uninstall restores exactly that,
+    then deletes the marker. A re-install must not overwrite the original."""
+    root, env = _upload_fakes(tmp_path, conntrack_has_bytes_out=True, acct_value=before,
+                              probe="bytes")
+    install = _run_upload_fn(root, env, "install_upload_bytes")
+    assert install.returncode == 0, install.stderr + install.stdout
+    assert (root / "state").read_text() == "1"
+    assert (root / "owned").read_text() == before + "\n"
+    assert os.stat(root / "owned").st_mode & 0o777 == 0o600
+    assert "try-restart fr-apply-helper.service" in (root / "systemctl-calls").read_text()
+    again = _run_upload_fn(root, env, "install_upload_bytes")
+    assert again.returncode == 0, again.stderr
+    assert (root / "owned").read_text() == before + "\n", "the original value stays"
+    assert (root / "state").read_text() == "1"
+    remove = _run_upload_fn(root, env, "remove_upload_bytes")
+    assert remove.returncode == 0, remove.stderr
+    assert (root / "state").read_text() == before
+    assert not (root / "owned").exists(), "the marker is deleted"
+    assert not (root / "units" / "fr-ai-upload.service").exists()
+    assert not (root / "sysctl.conf").exists()
+
+
+def test_uninstall_reverts_the_patch_and_restarts_the_helper(tmp_path):
+    """Review F2, functionally: a revert is followed by the helper restart,
+    and a quiet router (no flows) only warns."""
+    root, env = _upload_fakes(tmp_path, conntrack_has_bytes_out=True, acct_value="1",
+                              probe="empty")
+    result = _run_upload_fn(root, env, "remove_upload_bytes")
+    assert result.returncode == 0, result.stderr
+    assert "-R" in (root / "patch-calls").read_text()
+    assert "try-restart fr-apply-helper.service" in (root / "systemctl-calls").read_text()
+    assert (root / "state").read_text() == "1", "no marker, no sysctl call"
+    assert (root / "sysctl-calls").read_text() == ""

@@ -9,16 +9,22 @@ ConditionPathExists=/etc/sysctl.d/60-ai-perimeter.conf
 
 [Service]
 Type=simple
-# FR_OS's sensor account (security-lessons A1): the helper already allows it
-# the read-only conntrack_sample command, and nothing else is reachable from
-# here. Not a dynamic account: the uid must be fr_os-sensor for the helper's
-# peer check.
+# FR_OS's sensor account (security-lessons A1): the helper allows that uid
+# FR_OS's SENSOR_COMMANDS, of which the collector uses only the read-only
+# conntrack_sample. Not a dynamic account: the uid must be fr_os-sensor for
+# the helper's peer check.
 User=fr_os-sensor
+# Review F1: the webUI reads the totals, so they live group-readable under
+# FR_OS's shared group (fr_os-feeds, of which fr_os-webui and fr_os-sensor
+# are both members) -- never by adding the sensor account to the webUI's
+# group (FR_OS SEC-11). The collector keeps writing upload.json mode 0640.
+Group=fr_os-feeds
 ExecStart=fr-ai-upload
 Restart=on-failure
 RestartSec=5
 # The totals (upload.json), written atomically, mode 0640.
 StateDirectory=fr_os-ai-perimeter
+StateDirectoryMode=0750
 # Sandbox (security-lessons I1; checked by tests/test_systemd_units.py).
 NoNewPrivileges=yes
 ProtectSystem=strict
