@@ -18,6 +18,7 @@ format cannot drift):
 | `ai_ids_state.json` | fr-ai-ids recent events |
 | `iot_inventory.json` | fr-iot-scan inventory |
 | `queries.log` | dnsmasq `log-queries=extra` |
+| `sni_events.jsonl` | fr-xdp-sni-logger event file (office scenario only) |
 
 ## Office scenario (`--scenario office`)
 
@@ -27,7 +28,9 @@ through a fake job offer. The engineer's laptop (`design-laptop`,
 192.168.10.40) phones home with a TLS client on the fingerprint blocklist and
 its lookups of the threat-feed domain are blocked; then the design file server
 (`nas`, 192.168.10.30) scans many new hosts and looks up random-looking names
-that don't exist. The reception PC (192.168.10.41) stays ordinary background.
+that don't exist. The XDP filter drops the loader's connections in the kernel,
+before they reach the internet. The reception PC (192.168.10.41) stays ordinary
+background.
 
 The actor's name appears only in the threat-feed label on the blocklisted
 fingerprint, as it would in real life. The AI IDS events are not written by
