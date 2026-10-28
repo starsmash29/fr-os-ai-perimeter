@@ -114,7 +114,7 @@ def test_the_demo_scenario_end_to_end(env, tmp_path):  # noqa: F811
     env["app"].state.ai_perimeter_sources = Sources(
         ids=out / "ai_ids_state.json", appid=out / "appid_usage.json",
         tls=out / "tls_fingerprints.json", devices=out / "iot_inventory.json",
-        dns=out / "queries.log")
+        dns=out / "queries.log", sni=out / "sni_events.jsonl")
     env["app"].state.ai_perimeter_clock = lambda: DEMO_NOW
     client = login(env)
     page = client.get("/ai-perimeter")
@@ -146,7 +146,7 @@ def _office(env, tmp_path):  # noqa: F811
     env["app"].state.ai_perimeter_sources = Sources(
         ids=out / "ai_ids_state.json", appid=out / "appid_usage.json",
         tls=out / "tls_fingerprints.json", devices=out / "iot_inventory.json",
-        dns=out / "queries.log")
+        dns=out / "queries.log", sni=out / "sni_events.jsonl")
     env["app"].state.ai_perimeter_clock = lambda: OFFICE_NOW
     return login(env)
 
@@ -202,4 +202,30 @@ def test_the_office_file_server_reads_as_dga_and_scan(env, tmp_path):  # noqa: F
     sent = json.dumps([r["json"] for r in env["provider"].requests])
     assert "DGA-like NXDOMAIN lookups" in sent and "destination-scan pattern" in sent
     for secret in (NAS_IP, NAS_MAC):
+        assert secret not in sent
+
+
+def test_the_office_laptop_cites_the_kernels_sni_drops(env, tmp_path):  # noqa: F811
+    """The eBPF/XDP layer in the scene: the loader's retries were dropped in
+    the kernel, and the model can read and cite those drops (sni-1). The
+    destination address stays out of the request, and the reception PC's
+    "pass" line is no evidence at all."""
+    client = _office(env, tmp_path)
+    env["provider"].queue = [
+        tool("tls_fingerprints"), tool("sni_blocks"),
+        answer(title="Laptop's loader was stopped in the kernel", severity="high",
+               summary="device-1 ran a TLS client the feed lists as an Azarus Group "
+                       "loader; the XDP filter dropped its four connections.",
+               evidence=["tls-1", "sni-1"],
+               suggested_intent="Cut device-1 off the internet")]
+    page = post(client, "/ai-perimeter/explain", {"ip": LAPTOP_IP})
+    text = html.unescape(page.text)
+    assert "<code>sni-1</code>" in page.text
+    assert "The severity was raised" not in text
+    sent = json.dumps([r["json"] for r in env["provider"].requests])
+    assert '"server_name": "update-cdn-checker.example"' in sent.replace('\\"', '"')
+    assert '"dropped": 4' in sent.replace('\\"', '"')
+    assert "kernel eBPF/XDP filter" in sent
+    for secret in (LAPTOP_IP, LAPTOP_MAC, "design-laptop", "203.0.113.10",
+                   "office-portal.example"):
         assert secret not in sent

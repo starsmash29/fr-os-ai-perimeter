@@ -31,8 +31,8 @@ never executes anything:
 
 | | Feature | Status |
 |---|---|---|
-| 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals (A2), the webUI screen (A3), the installer and the evaluation harness (A5) done; measured results next |
-| 2 | **Edge Anomaly Explainer:** a pseudonymised evidence bundle from FR_OS's AI IDS, App-ID, TLS JA4 and DNS signals → a short incident explanation with NIS2 / NIST SP 800-53 control references; Shadow AI use (AI services per device) | explainer, Shadow AI use, the screen part, demo data and the measured explanation eval (A4) done; per-device upload bytes next |
+| 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals (A2), the webUI screen (A3), the installer and the evaluation (A5) done, with measured results for four models |
+| 2 | **Edge Anomaly Explainer:** a pseudonymised evidence bundle from FR_OS's AI IDS, App-ID, TLS JA4, DNS and eBPF/XDP SNI signals → a short incident explanation with NIS2 / NIST SP 800-53 control references; Shadow AI use (AI services per device) | explainer, Shadow AI use, the screen part, two demo scenes and the measured explanation eval (A4) done; per-device upload bytes next (an opt-in, marked FR_OS patch) |
 
 ## Models
 
@@ -113,8 +113,19 @@ The model value above is a placeholder, not a downloadable model identifier.
 There is no default local model. If `base_url` is omitted, the client defaults to
 `http://127.0.0.1:11434/v1`. A local server without authentication needs no API key.
 
-TODO(claude): verify the Glimmer model artifact, quantization, server model ID and
-llama.cpp launch command for the demo hardware.
+The evaluation ran Glimmer this way (docs/eval/README.md): the
+`Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf` build from
+[`meta-models/Muse-Glimmer-30B-GGUF`](https://huggingface.co/meta-models/Muse-Glimmer-30B-GGUF)
+on llama.cpp b11933 (CUDA), with `-ngl 20 --reasoning-budget 0 -np 1` on an 8 GB GPU and
+32 GB RAM. That works, but at about 3 tokens a second a request takes minutes; a GPU that
+holds the whole model is what makes it interactive.
+
+### Muse Glimmer on a cloud GPU (Modal)
+
+The same open-weight model on a rented GPU instead of your own PC, as a Modal
+Dedicated Endpoint behind a proxy token: [`deploy/modal/`](deploy/modal/README.md) has
+the steps and what was run. It is a cloud provider like the two below
+(`allow_cloud: true`, HTTPS, a key file), so it is opt-in, and it scales to zero when idle.
 
 ### Baseten / Muse Spark Open
 
@@ -138,9 +149,9 @@ allow_cloud: true
 timeout: 120
 ```
 
-These cloud URLs and model IDs are the presets currently in the repository.
-TODO(claude): verify account access and live availability of both cloud presets
-before recording a demo; parsing the settings does not prove provider access.
+These cloud URLs and model IDs are the presets in the repository. Both were used
+for the measured evaluation runs of 2026-10-27 (docs/eval/README.md); access still
+depends on your own account.
 
 Cloud use requires `allow_cloud: true` and HTTPS. The URL's host determines
 whether a call is local: `localhost` and literal loopback, private or link-local
@@ -220,12 +231,15 @@ does not report an end-to-end deployment test.
 Above the request box, the screen lists the devices FR_OS's sensors flagged in the last
 24 hours: an AI IDS anomaly event, use of an AI service (Shadow AI: FR_OS App-ID's `ai`
 category plus Gemini, Claude, Copilot, Perplexity, DeepSeek, Mistral and Meta AI seen in the
-resolver's query log), or a TLS fingerprint on the blocklist. An admin clicks **Explain**:
+resolver's query log), a TLS fingerprint on the blocklist, or TLS connections FR_OS's
+eBPF/XDP filter dropped in the kernel by server name. An admin clicks **Explain**:
 
 1. The webUI builds the device's **evidence bundle** from FR_OS's own sensor files
    (`incident/evidence.py`). The device is `device-1`: its address, MAC and name never
    reach the model, and every sensor string is cut short and scrubbed of addresses. Every
-   item has an id (`ids-1`, `ai-1`, `tls-1`, `dns-1`). No packet contents exist to send.
+   item has an id (`ids-1`, `ai-1`, `tls-1`, `dns-1`, `sni-1`). No packet contents exist to send.
+   The kernel's drops come from fr-xdp-sni-logger's event file: per server name, how many
+   and when; the destination address is not carried.
 2. `fr-ai-assist` runs a short **read-only agent loop** (`incident/explain.py`): the model
    sees an overview, asks for up to four evidence sections, then answers in a closed JSON
    format. Its "tools" are lookups in the bundle; nothing else is reachable.
@@ -298,8 +312,9 @@ a wrong answer (`tests/test_eval.py`).
 
 **Measured (2026-10-27):** Muse Spark 1.3 got 118 of 120 right, Muse Spark Open 117 of 120,
 Muse Wonder (preview) 120 of 120, and Muse Glimmer 30B, running on one consumer PC, 10 of a
-12-case sample (the other two timed out). None of the 372 runs proposed anything that would
-have exposed the router or the LAN.
+12-case sample (the other two timed out). **Measured (2026-10-28):** Muse Glimmer 30B on a
+Modal GPU (BF16, [deploy/modal/](deploy/modal/README.md)) got 117 of 120 right, with a median
+of 8 s. None of the 492 runs proposed anything that would have exposed the router or the LAN.
 Details, setup and the misses: [`docs/eval/README.md`](docs/eval/README.md); the page:
 `docs/eval/report.html`.
 
@@ -317,7 +332,7 @@ is needed, and that the injected case's suggestion opens nothing. The results fi
 text; the two suites are not merged. Tests: `tests/test_eval_incidents.py`.
 
 **Measured (2026-10-27, 5 cases × 3):** Muse Spark Open and Muse Wonder 14 of 15, Muse Spark
-1.3 12 of 15. Every miss is the shadow-AI case explained without a suggested change; no
+1.3 12 of 15; Muse Glimmer on Modal (2026-10-28) 12 of 15. Every miss is the shadow-AI case explained without a suggested change; no
 explanation was refused, cited made-up evidence or followed the hidden instruction
 (`docs/eval/incident-results.json`, details in `docs/eval/README.md`).
 

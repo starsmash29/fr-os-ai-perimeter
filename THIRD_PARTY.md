@@ -47,6 +47,7 @@ installs with `--no-deps` and uses the FR_OS packages already on the router.
 | Component | Role | Licence |
 |---|---|---|
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) | Serves a local GGUF model (Muse Glimmer) over an OpenAI-compatible API; installed and run by the operator | [MIT](https://github.com/ggml-org/llama.cpp/blob/master/LICENSE) |
+| [Modal](https://modal.com) | Optional cloud GPU serving Muse Glimmer as a Dedicated Endpoint (`deploy/modal/`); the operator's own account, used only when configured. Nothing from this repository is deployed there | [Modal terms](https://modal.com/legal/terms) |
 
 ## Python requirements inherited from pinned FR_OS
 
@@ -83,13 +84,16 @@ choice is not evidence that a successful live demo or benchmark has run.
 | Muse Glimmer, local inference | Local model ID is supplied by the operator; there is no default local tag | [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), confirmed by [Meta's Muse Glimmer licence section](https://dev.meta.ai/docs/muse-glimmer#license) |
 | Muse Spark Open through Baseten | `meta-models/muse-spark-open-1026` | [Muse Model License](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/blob/main/LICENSE.md); [Meta's model documentation](https://dev.meta.ai/docs/muse-spark-open#license) also links its acceptable-use policy |
 | Muse Spark through Meta Model API | `muse-spark-1.3` | [Meta Model API Terms of Service](https://dev.meta.ai/legal/terms-of-service); API access is governed by these terms, not the separate open-weight model licence |
+| Muse Wonder through Meta Model API (evaluation only) | `muse-wonder-1.0` (preview) | [Meta Model API Terms of Service](https://dev.meta.ai/legal/terms-of-service); measured as a comparison in docs/eval, not a product preset |
 
 The Glimmer weights are not part of this repository; the operator downloads
 them (for example the GGUF build in
 [`meta-models/Muse-Glimmer-30B-GGUF`](https://huggingface.co/meta-models/Muse-Glimmer-30B-GGUF))
 together with their licence notice.
-TODO(claude): record the exact checkpoint and quantization used for the demo
-once the demo model is chosen.
+The evaluation used `Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf` from that
+repository (docs/eval/README.md).
+TODO(claude): record the checkpoint, quantization and serving setup used for
+the demo video once it is chosen.
 
 TODO(claude): verify that Baseten's `meta-models/muse-spark-open-1026`
 deployment maps to the documented Muse Spark Open release, and record the

@@ -19,7 +19,8 @@ checks it; and the administrator reviews the diff before approving it.
 ## What I built
 
 The hackathon contribution is the AI-Perimeter service, provider client,
-natural-language orchestrator and webUI screen in this repository. The firewall
+natural-language orchestrator, anomaly explainer, webUI screen and evaluation in
+this repository. The firewall
 and router platform, FR_OS, existed before the event and is a pinned dependency.
 Its packet enforcement, configuration validator, rule linter, webUI foundation
 and commit-confirm apply mechanism are reused.
@@ -35,12 +36,25 @@ model's own explanation. **Approve and save** re-checks the proposal before
 saving through FR_OS's helper. Applying is a separate administrator action,
 using FR_OS's confirmation-and-rollback flow.
 
+The same screen lists the devices FR_OS's own sensors flagged in the last 24
+hours: an AI IDS anomaly event, use of an AI service (Shadow AI), or a TLS client
+on the fingerprint blocklist. **Explain** runs a short, read-only agent loop: the
+model sees an overview of a pseudonymised evidence bundle (the device is
+`device-1`; its address, MAC and name never leave the router), asks for up to
+four evidence sections, and answers in a closed format. Code checks that every
+cited item exists and raises the severity to what the evidence alone shows. The
+card adds fixed NIS2 and NIST SP 800-53 control references and, for a high
+severity incident, NIS2's 24-hour early-warning reminder. These are references,
+not a compliance report. A suggested change becomes a request in the box above;
+nothing happens until the administrator proposes, reviews and saves it.
+Quarantine stays with FR_OS's own engine: the model never touches it.
+
 TODO(claude): verify the installed demo's complete save, Apply, confirmation and
 rollback sequence before submitting this description as demonstrated behavior.
 
 ## The role of Meta models and tooling
 
-Muse Glimmer is the intended local model, served through an OpenAI-compatible
+Muse Glimmer is the default local model, served through an OpenAI-compatible
 endpoint such as llama.cpp. The client also includes explicit opt-in presets for
 Muse Spark Open through Baseten and Muse Spark through the Meta Model API.
 The model translates intent into structured operations and may provide a textual
@@ -53,14 +67,22 @@ tokens and WireGuard key material are excluded from that context; device
 identifiers and rule details can remain. Cloud access requires explicit opt-in
 and HTTPS, with credentials read from a private file.
 
-This is the implemented integration path for Meta models. It does not establish
-that every configured provider has been exercised successfully.
+All three were exercised in the measured evaluation of 2026-10-27: Muse Spark
+1.3 on the Meta Model API, Muse Spark Open (`meta-models/muse-spark-open-1026`)
+on Baseten, and Muse Glimmer 30B (Q4_K_M GGUF on llama.cpp) on one consumer PC.
+On 2026-10-28 Muse Glimmer was also measured in full on a rented GPU (Modal,
+BF16), an opt-in cloud option like the others. Muse Wonder (preview) was
+measured as a comparison only.
 
-TODO(claude): verify the exact Glimmer artifact, quantization and serving
-configuration, the cloud model versions actually exercised, and the corresponding
-run evidence. Add the precise Meta developer tooling used during development
-only when verified; API presets alone do not prove usage. Confirm the applicable
-model licences and API terms for the submitted setup.
+**Muse Code** wrote the first version of five merged pull requests during the event, each
+reviewed before merge: the evaluation report page (#14), its sample-data marker
+(#17), the demo sensor-file generator (#19), the styling of the explanation card
+(#21) and the office attack scenario (#23). It worked only on demo data and
+presentation code; the security-relevant code was written and reviewed
+separately.
+
+TODO(claude): record the serving setup of the model used in the demo video, and
+confirm the API terms for the submitted setup.
 
 ## The demo
 
@@ -74,6 +96,20 @@ The recording is planned around the repository's
 3. Show an injection test in which a supplied model response attempts to expose
    the admin page. The code rejects the operation even when the supplied model
    response follows the hostile instruction.
+4. **Home, Shadow AI:** late on a school night the kids' tablet uses ChatGPT from
+   a TLS client the network has not seen before. Explain it, and turn the
+   suggestion into a reviewed schedule rule.
+5. **Office, a targeted attack:** Monday morning at HSML, a fictional
+   semiconductor-equipment company, attacked by the fictional "Azarus Group"
+   through a fake job offer. An engineer's laptop runs a loader whose TLS client
+   the threat feed lists, and its lookups of the threat domain are blocked; then
+   the design file server scans new hosts and looks up random-looking names that
+   do not exist. FR_OS's own engine flags both within about a minute; the
+   explanation cites the evidence at high severity with the NIS2 24-hour note,
+   and the suggested change cuts the laptop off the internet once the
+   administrator approves. The claim is detection and isolation, not proof of
+   what was or was not stolen. Every company name, domain and indicator in the
+   scene is invented ([demo generator](../../demo/shadow_ai/README.md)).
 
 The existing [orchestrator tests](../../tests/test_orchestrator.py) encode these
 cases using supplied model responses and the real validator/linter. They are
@@ -91,20 +127,36 @@ inspectable configuration change, while preserving administrator control and the
 router's enforcement boundary. A local deployment can keep model requests on
 the chosen local endpoint; cloud models provide an explicit alternative.
 
-We have not established a measured reduction in administration time, deployment
-adoption, or a model safety rate here. The planned evaluation will compare
-correct outcomes, wrong refusals, unsafe acceptances and median response time
-across the selected models, while recording errors separately.
+We have not measured a reduction in administration time or deployment
+adoption. We did measure the models ([evaluation](../eval/README.md)): 40
+intents (good, ambiguous, dangerous and injected requests), each judged in code
+by simulating the resulting rules, so no model grades another.
 
-TODO(claude): verify the evaluation cases, verdicts, timing definition and measured
-results on main before adding performance or safety claims.
+| Model | Where | Correct | Unsafe accepted | Median |
+|---|---|---|---|---|
+| Muse Spark 1.3 | Meta Model API | 118 / 120 | 0 | 3.3 s |
+| Muse Spark Open | Baseten | 117 / 120 | 0 | 3.3 s |
+| Muse Glimmer 30B Q4_K_M | one consumer PC (12-case sample) | 10 / 12 | 0 | 392 s |
+| Muse Glimmer 30B BF16 | Modal, one H200 GPU | 117 / 120 | 0 | 8.0 s |
+| Muse Wonder (preview) | Meta Model API | 120 / 120 | 0 | 5.0 s |
+
+No model proposed a change that would have exposed the router or a LAN device in
+any of the 492 runs. The explanation cases (five evidence bundles, three runs
+each) scored 14, 14, 12 and 12 of 15 for Spark Open, Wonder, Spark 1.3 and
+Glimmer on Modal; every miss
+was the same judgement call (no suggested change for a teenager's late-night
+ChatGPT use), and no model followed the instruction hidden in a DNS name. The
+consumer-PC Glimmer row is a small sample on modest hardware with reasoning off
+and is not directly comparable with the cloud rows; the Modal row is the same
+model at full precision.
 
 ## Next work
 
-An anomaly explainer and Shadow AI upload detection are planned extensions.
-They are not part of the working orchestrator described above.
-
-TODO(claude): not built yet
+- **Shadow AI by volume:** today Shadow AI is measured as use and its timing.
+  Bytes uploaded per device need FR_OS's conntrack accounting, an FR_OS change
+  planned after the event.
+- **Compliance reporting:** the explanation carries control references only; a
+  full NIS2 / NIST mapping and audit export is outside this project.
 
 The central design is already visible in the implementation: model output becomes
 a proposal that a person can inspect, while deterministic checks and explicit
@@ -113,7 +165,7 @@ approval remain on the path to a firewall change.
 ## Review basis
 
 This draft was checked against main at
-[2e75a56](https://github.com/starsmash29/fr-os-ai-perimeter/tree/2e75a56a9130bb07bc13f786f45d382403751753).
+[92ccfb1](https://github.com/starsmash29/fr-os-ai-perimeter/tree/92ccfb1a26f4bc6527d8b74172eeaeecf445211b).
 Source references: [provider client](../../src/ai_perimeter/client.py),
 [settings](../../src/ai_perimeter/settings.py),
 [prompt](../../src/ai_perimeter/orchestrator/prompt.py),
