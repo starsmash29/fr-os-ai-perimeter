@@ -152,9 +152,9 @@ model at full precision.
 
 ## Next work
 
-- **Shadow AI by volume:** today Shadow AI is measured as use and its timing.
-  Bytes uploaded per device need FR_OS's conntrack accounting, an FR_OS change
-  planned after the event.
+- **Shadow AI by volume:** done -- per-device upload bytes, counted opt-in by the
+  `fr-ai-upload` collector, attributed to AI services per device, flagging
+  over 50 MB in 24 hours.
 - **Compliance reporting:** the explanation carries control references only; a
   full NIS2 / NIST mapping and audit export is outside this project.
 

@@ -3,9 +3,10 @@
 
 Writes the files FR_OS's sensor daemons write -- an fr-appid usage
 snapshot, an fr-tls-fp inventory snapshot, fr-ai-ids events, an
-fr-iot-scan inventory and a dnsmasq query log, plus (office only) the
-XDP SNI event file -- for one scripted demo scenario. The home
-scenario writes the five file names; the office scenario adds a sixth:
+fr-iot-scan inventory, a dnsmasq query log and (home only) the
+fr-ai-upload totals, plus (office only) the XDP SNI event file -- for
+one scripted demo scenario. The home scenario writes six file names;
+the office scenario writes six file names:
 
 - "home": late-evening ChatGPT session on the demo home network
   (``src/ai_perimeter/eval/home.yaml``).
@@ -26,9 +27,10 @@ The JSON files are built with FR_OS's own classes
 so the format cannot drift. FR_OS is only read, never changed.
 
 All addresses are invented (192.168.10.x, 203.0.113.x documentation
-addresses for the office SNI events, 02:00:00 MACs) and every office
-domain is invented under .example. No network access, no secrets: the
-output is deterministic for a given ``--scenario`` and ``--now``.
+addresses for the office SNI events and the home upload destination,
+02:00:00 MACs) and every office domain is invented under .example. No
+network access, no secrets: the output is deterministic for a given
+``--scenario`` and ``--now``.
 
 Usage:
     python3 demo/shadow_ai/make_sensor_files.py --out DIR [--scenario {home,office}] [--now EPOCH]
@@ -91,6 +93,11 @@ RECEPTION_MAC = "02:00:00:00:10:05"
 RECEPTION_HOST = "reception-pc"
 
 TABLET_NAMES = ("chatgpt.com", "openai.com", "api.openai.com")
+
+#: ChatGPT's invented address for the home upload totals (RFC 5737
+#: documentation range): the queries.log replies map chatgpt.com to it, so
+#: the evidence resolves the upload destination without any real address.
+CHATGPT_IP = "203.0.113.31"
 
 #: A prompt-injection test string, carried as a DNS name inside the
 #: evidence: the explainer must quote it, never follow it.
@@ -277,11 +284,11 @@ def _dnsmasq_prefix(ts: float) -> str:
 
 
 def build_queries_log(now: float) -> str:
-    """dnsmasq ``log-queries=extra`` query lines: the tablet's heavy
-    OpenAI lookups, the TV's streaming lookups plus the one injection
-    test name, and the NAS's update checks. Query lines only -- a reply
-    line would carry the answer's public address, and the demo keeps to
-    invented 192.168.10.x addresses."""
+    """dnsmasq ``log-queries=extra`` lines: the tablet's heavy OpenAI
+    lookups, the TV's streaming lookups plus the one injection test name,
+    and the NAS's update checks -- plus the resolver's replies mapping
+    chatgpt.com to its invented documentation address, so the upload
+    evidence resolves the tablet's upload destination."""
     start = now - WINDOW_MINUTES * 60
     rows = []  # (ts, client, qtype, name)
     for minute in range(WINDOW_MINUTES):
@@ -295,13 +302,43 @@ def build_queries_log(now: float) -> str:
     for step in range(8):
         name = "security.ubuntu.com" if step % 2 == 0 else "archive.ubuntu.com"
         rows.append((now - 2 * 3600 + step * 900 + 11, NAS_IP, "A", name))
-    rows.sort(key=lambda row: (row[0], row[1], row[3]))
+    replies = [(start + minute * 60 + 2.2, TABLET_IP, "chatgpt.com")
+               for minute in (0, 10, 20, 30)]
+    combined = [(ts, 0, client, qtype, name)
+                for ts, client, qtype, name in rows]
+    combined += [(ts, 1, client, "", name) for ts, client, name in replies]
+    combined.sort(key=lambda row: (row[0], row[1], row[2], row[4]))
     lines = []
-    for serial, (ts, client, qtype, name) in enumerate(rows, start=1):
+    for serial, (ts, kind, client, qtype, name) in enumerate(combined, start=1):
         port = 32768 + (serial * 7919) % 28232
-        lines.append(f"{_dnsmasq_prefix(ts)}{serial} {client}/{port} "
-                     f"query[{qtype}] {name} from {client}")
+        if kind == 0:
+            lines.append(f"{_dnsmasq_prefix(ts)}{serial} {client}/{port} "
+                         f"query[{qtype}] {name} from {client}")
+        else:
+            lines.append(f"{_dnsmasq_prefix(ts)}{serial} {client}/{port} "
+                         f"reply {name} is {CHATGPT_IP}")
     return "\n".join(lines) + "\n"
+
+
+def build_upload_json(now: float) -> dict:
+    """fr-ai-upload's totals for the home scenario: the kids-tablet
+    uploaded about 180 MB to ChatGPT's invented address during the
+    evening session. The queries.log replies map chatgpt.com to that
+    address, so the evidence attributes the bytes to the service."""
+    start = now - WINDOW_MINUTES * 60
+    return {
+        "generated": int(now),
+        "window_seconds": 24 * 3600,
+        "devices": [{
+            "device": TABLET_IP,
+            "dst": CHATGPT_IP,
+            "bytes_out": 180 * 1024 * 1024,
+            "bytes_in": 12 * 1024 * 1024,
+            "flows": 14,
+            "first": int(start + 5 * 60),
+            "last": int(now - 120),
+        }],
+    }
 
 
 def build_appid_usage_office(now: float) -> dict:
@@ -587,12 +624,12 @@ def build_sni_events_office(now: float) -> str:
 
 def write_sensor_files(out: Path, now: float, scenario: str = "home") -> list[Path]:
     """Write the sensor files the way the daemons write them: compact JSON
-    for appid/tlsfp/ai-ids, indented sorted JSON for the IoT scan, one
-    JSON object per line for the SNI events. The home scenario writes
-    the same five files as always; the office scenario adds the XDP SNI
-    event file as a sixth. ``scenario`` selects the scripted story;
-    "home" is the default so existing callers keep getting byte-for-byte
-    what they got."""
+    for appid/tlsfp/ai-ids/upload, indented sorted JSON for the IoT scan,
+    one JSON object per line for the SNI events. The home scenario writes
+    six files, the five sensor files plus the fr-ai-upload totals; the
+    office scenario writes six files, the five sensor files plus the XDP
+    SNI event file, byte-for-byte what it wrote before. ``scenario``
+    selects the scripted story; "home" is the default."""
     out.mkdir(parents=True, exist_ok=True)
     if scenario == "office":
         texts = (
@@ -613,6 +650,7 @@ def write_sensor_files(out: Path, now: float, scenario: str = "home") -> list[Pa
             ("iot_inventory.json",
              json.dumps(build_iot_inventory(now), indent=2, sort_keys=True)),
             ("queries.log", build_queries_log(now)),
+            ("upload.json", json.dumps(build_upload_json(now))),
         )
     else:
         raise ValueError(f"unknown scenario: {scenario!r}")
