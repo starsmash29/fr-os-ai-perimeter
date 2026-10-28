@@ -81,8 +81,13 @@ reviewed before merge: the evaluation report page (#14), its sample-data marker
 presentation code; the security-relevant code was written and reviewed
 separately.
 
-TODO(claude): record the serving setup of the model used in the demo video, and
-confirm the API terms for the submitted setup.
+The demo video runs **Muse Glimmer 30B BF16** (`meta-models/Muse-Glimmer-30B`,
+revision `f84ecc3a0ea984a4c04542a84269e3d065350a6e`, Apache 2.0) on a Modal
+Dedicated Endpoint with one H200 GPU ([deploy/modal/](../../deploy/modal/README.md)):
+the same open-weight model as the local default, on a GPU fast enough to answer
+on camera. It is an opt-in cloud provider under the operator's own Modal
+account and [Modal's terms](https://modal.com/legal/terms); the router only
+sends the intent and a redacted configuration summary of the demo network.
 
 ## The demo
 
