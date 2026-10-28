@@ -19,13 +19,16 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 stage=$work/$name
-mkdir -p "$stage/systemd/fr-webui.service.d"
+mkdir -p "$stage/systemd/fr-webui.service.d" "$stage/patches"
 "$PYTHON" -m pip wheel --quiet --no-deps -w "$stage" "$ROOT"
 install -m 0755 "$ROOT/installer/install.sh" "$stage/install.sh"
-install -m 0644 "$ROOT/systemd/fr-ai-assist.socket" "$ROOT/systemd/fr-ai-assist.service" "$stage/systemd/"
+install -m 0644 "$ROOT/systemd/fr-ai-assist.socket" "$ROOT/systemd/fr-ai-assist.service" \
+    "$ROOT/systemd/fr-ai-upload.service" "$stage/systemd/"
 install -m 0644 "$ROOT/systemd/fr-webui.service.d/ai-perimeter.conf" "$stage/systemd/fr-webui.service.d/"
+install -m 0644 "$ROOT/integration/fr_os/conntrack-bytes.patch" "$stage/patches/"
 (cd "$stage" && sha256sum -- *.whl install.sh systemd/fr-ai-assist.socket systemd/fr-ai-assist.service \
-    systemd/fr-webui.service.d/ai-perimeter.conf > SHA256SUMS)
+    systemd/fr-ai-upload.service systemd/fr-webui.service.d/ai-perimeter.conf \
+    patches/conntrack-bytes.patch > SHA256SUMS)
 
 mkdir -p "$OUT"
 tar -C "$work" --owner=0 --group=0 --numeric-owner --sort=name -czf "$OUT/$name.tar.gz" "$name"

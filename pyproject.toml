@@ -19,6 +19,7 @@ dependencies = [
 [project.scripts]
 ai-perimeter-chat = "ai_perimeter.cli:main"
 fr-ai-assist = "ai_perimeter.service:main"
+fr-ai-upload = "ai_perimeter.upload.collector:main"
 fr-webui-ai = "ai_perimeter.webui.server:main"
 ai-perimeter-eval = "ai_perimeter.eval.runner:main"
 

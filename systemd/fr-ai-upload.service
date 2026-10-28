@@ -1,0 +1,59 @@
+[Unit]
+Description=FR_OS AI-Perimeter upload-bytes collector (opt-in Shadow AI volume)
+Documentation=https://github.com/starsmash29/fr-os-ai-perimeter
+After=network-online.target
+# Off unless configured (security-lessons I1, K7): without conntrack
+# accounting there is nothing to count, so the unit only starts where the
+# installer enabled it (installer/install.sh --with-upload-bytes).
+ConditionPathExists=/etc/sysctl.d/60-ai-perimeter.conf
+
+[Service]
+Type=simple
+# FR_OS's sensor account (security-lessons A1): the helper already allows it
+# the read-only conntrack_sample command, and nothing else is reachable from
+# here. Not a dynamic account: the uid must be fr_os-sensor for the helper's
+# peer check.
+User=fr_os-sensor
+ExecStart=fr-ai-upload
+Restart=on-failure
+RestartSec=5
+# The totals (upload.json), written atomically, mode 0640.
+StateDirectory=fr_os-ai-perimeter
+# Sandbox (security-lessons I1; checked by tests/test_systemd_units.py).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+# Group may read the totals; the collector chmods upload.json to 0640 itself.
+UMask=0027
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+# AF_UNIX only: the helper socket. No PrivateNetwork: the collector must
+# reach the helper's socket, so the network namespace stays; IPAddressDeny
+# keeps it from reaching any IP address instead.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=128M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

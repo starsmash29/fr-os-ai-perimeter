@@ -1,9 +1,10 @@
 #!/bin/sh
 # Install the FR_OS AI-Perimeter on an FR_OS router, or take it off again.
 #
-#   sudo ./install.sh              install, or update in place
-#   sudo ./install.sh --uninstall  remove it; keep ai-perimeter.yaml and the key
-#   sudo ./install.sh --purge      remove it with ai-perimeter.yaml and the key
+#   sudo ./install.sh                        install, or update in place
+#   sudo ./install.sh --with-upload-bytes    also count per-device upload bytes (opt-in FR_OS patch)
+#   sudo ./install.sh --uninstall            remove it; keep ai-perimeter.yaml and the key
+#   sudo ./install.sh --purge                remove it with ai-perimeter.yaml and the key
 #
 # Run it from the unpacked bundle (installer/make-bundle.sh): the wheel, the
 # systemd units and SHA256SUMS sit next to it. Nothing is downloaded and no
@@ -16,6 +17,12 @@
 #   reachable only by the webUI's account (security-lessons A1, I1);
 # - it is off until /etc/fr_os/ai-perimeter.yaml says enabled: true (I1, K7),
 #   and the API key file stays root's, mode 0600.
+# - with --with-upload-bytes only: conntrack accounting
+#   (/etc/sysctl.d/60-ai-perimeter.conf), the two-file FR_OS patch
+#   (integration/fr_os/conntrack-bytes.patch, so FR_OS's integrity check
+#   lists those two files on a router that opts in, SEC-15), and the
+#   fr-ai-upload collector running as fr_os-sensor. Without the flag none
+#   of the three is touched.
 set -eu
 
 UNITS_DIR=/etc/systemd/system
@@ -27,15 +34,18 @@ KEY_FILE=$KEY_DIR/api_key
 DIST=fr-os-ai-perimeter
 WEBUI_USER=fr_os-webui
 SENSOR_USER=fr_os-sensor
+UPLOAD_UNIT=fr-ai-upload.service
+SYSCTL_CONF=/etc/sysctl.d/60-ai-perimeter.conf
 PYTHON=${PYTHON:-python3}
 
 HERE=$(cd -- "$(dirname -- "$0")" && pwd)
+PATCH=$HERE/patches/conntrack-bytes.patch
 
 say() { printf 'ai-perimeter: %s\n' "$*"; }
 die() { printf 'ai-perimeter: error: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-    sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 require_fr_os() {
@@ -71,10 +81,14 @@ verify_bundle() {
         die "expected exactly one wheel next to $0"
     fi
     WHEEL=$1
-    for f in fr-ai-assist.socket fr-ai-assist.service fr-webui.service.d/ai-perimeter.conf; do
+    for f in fr-ai-assist.socket fr-ai-assist.service fr-ai-upload.service fr-webui.service.d/ai-perimeter.conf; do
         [ -f "$HERE/systemd/$f" ] || die "systemd/$f is missing from the bundle"
         grep -q " systemd/$f\$" "$HERE/SHA256SUMS" || die "systemd/$f is not in SHA256SUMS"
     done
+    [ -f "$HERE/patches/conntrack-bytes.patch" ] \
+        || die "patches/conntrack-bytes.patch is missing from the bundle"
+    grep -q " patches/conntrack-bytes.patch\$" "$HERE/SHA256SUMS" \
+        || die "patches/conntrack-bytes.patch is not in SHA256SUMS"
     grep -q " $(basename "$WHEEL")\$" "$HERE/SHA256SUMS" || die "the wheel is not in SHA256SUMS"
 }
 
@@ -86,6 +100,7 @@ ping_as() {
 }
 
 install_it() {
+    with_upload=$1
     verify_bundle
     require_fr_os
     check_fr_os_execstart
@@ -93,7 +108,7 @@ install_it() {
     say "installing $(basename "$WHEEL")"
     "$PYTHON" -m pip install --quiet --break-system-packages --no-deps --no-index \
         --no-cache-dir --force-reinstall "$WHEEL"
-    for cmd in fr-ai-assist fr-webui-ai; do
+    for cmd in fr-ai-assist fr-ai-upload fr-webui-ai; do
         command -v "$cmd" >/dev/null || die "$cmd is not on PATH after installing"
     done
 
@@ -138,8 +153,58 @@ YAML
     systemctl restart fr-webui.service
 
     check_installed
+    if [ "$with_upload" = yes ]; then
+        install_upload_bytes
+    fi
     say "done. Open the webUI: AI-Perimeter is in the sidebar."
     say "to use a model, edit $SETTINGS (enabled: true), then: systemctl restart fr-ai-assist"
+}
+
+install_upload_bytes() {
+    command -v patch >/dev/null 2>&1 || die "patch(1) is needed for --with-upload-bytes"
+    frfw_dir=$("$PYTHON" -c 'import frfw, os; print(os.path.dirname(frfw.__file__))' 2>/dev/null) \
+        || die "frfw is not installed for $PYTHON"
+
+    say "enabling conntrack accounting"
+    printf '%s\n' "# FR_OS AI-Perimeter (opt-in --with-upload-bytes): count bytes per flow" \
+        "net.netfilter.nf_conntrack_acct = 1" > "$SYSCTL_CONF"
+    chmod 0644 "$SYSCTL_CONF"
+    sysctl -w net.netfilter.nf_conntrack_acct=1 >/dev/null \
+        || die "could not enable nf_conntrack_acct (sysctl)"
+
+    if grep -q 'bytes_out' "$frfw_dir/conntrack.py" 2>/dev/null; then
+        say "the FR_OS conntrack patch is already applied"
+    else
+        say "applying the conntrack patch to FR_OS (its integrity check will list 2 files)"
+        out=$(patch -p1 -d "$frfw_dir/.." < "$PATCH" 2>&1) \
+            || die "could not apply the conntrack patch: $out"
+        "$PYTHON" -c 'import frfw.conntrack, frfw.helper.server' 2>/dev/null \
+            || die "the patched FR_OS does not import"
+    fi
+
+    say "installing $UPLOAD_UNIT"
+    install -m 0644 "$HERE/systemd/$UPLOAD_UNIT" "$UNITS_DIR/$UPLOAD_UNIT"
+    systemctl daemon-reload
+    systemctl enable --now "$UPLOAD_UNIT"
+    systemctl is-active --quiet "$UPLOAD_UNIT" \
+        || die "$UPLOAD_UNIT did not start (journalctl -u $UPLOAD_UNIT)"
+    say "counting per-device upload bytes (upload.json every 15 s)"
+}
+
+remove_upload_bytes() {
+    systemctl disable --now "$UPLOAD_UNIT" 2>/dev/null || true
+    rm -f "$UNITS_DIR/$UPLOAD_UNIT" "$SYSCTL_CONF"
+    # Back to the kernel default; best effort (a container may refuse).
+    sysctl -w net.netfilter.nf_conntrack_acct=0 >/dev/null 2>&1 || true
+    frfw_dir=$("$PYTHON" -c 'import frfw, os; print(os.path.dirname(frfw.__file__))' 2>/dev/null) || true
+    if [ -n "${frfw_dir:-}" ] && [ -f "$PATCH" ] \
+            && grep -q 'bytes_out' "$frfw_dir/conntrack.py" 2>/dev/null; then
+        if patch -R -p1 -d "$frfw_dir/.." < "$PATCH" >/dev/null 2>&1; then
+            say "reverted the FR_OS conntrack patch"
+        else
+            say "WARNING: the FR_OS conntrack patch would not revert; its integrity check still lists it"
+        fi
+    fi
 }
 
 check_installed() {
@@ -163,6 +228,7 @@ uninstall_it() {
     systemctl stop fr-ai-assist.service 2>/dev/null || true
     rm -f "$UNITS_DIR/fr-ai-assist.socket" "$UNITS_DIR/fr-ai-assist.service" "$DROPIN"
     rmdir "$DROPIN_DIR" 2>/dev/null || true
+    remove_upload_bytes
     systemctl daemon-reload
     if "$PYTHON" -m pip show --quiet "$DIST" >/dev/null 2>&1; then
         "$PYTHON" -m pip uninstall --quiet --yes --break-system-packages "$DIST"
@@ -180,7 +246,8 @@ uninstall_it() {
 }
 
 case "${1:-}" in
-    "") install_it ;;
+    "") install_it no ;;
+    --with-upload-bytes) install_it yes ;;
     --uninstall) uninstall_it no ;;
     --purge) uninstall_it yes ;;
     -h|--help) usage ;;

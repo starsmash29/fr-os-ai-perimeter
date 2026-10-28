@@ -1,0 +1,68 @@
+diff --git a/frfw/conntrack.py b/frfw/conntrack.py
+index 3a78a20..4bb3b99 100644
+--- a/frfw/conntrack.py
++++ b/frfw/conntrack.py
+@@ -71,6 +71,12 @@ class ConntrackFlow:
+     sport: int
+     dst: str
+     dport: int
++    # AI-Perimeter: per-direction byte counters for the opt-in per-device
++    # upload collector. 0 when the kernel was not counting for the flow
++    # (`net.netfilter.nf_conntrack_acct` off): "no bytes=" means "unknown",
++    # reported as 0 so an unpatched-accounting router still answers.
++    bytes_out: int = 0
++    bytes_in: int = 0
+ 
+ 
+ def read_snapshot(path: Path = CONNTRACK_PATH) -> list[ConntrackFlow]:
+@@ -115,6 +121,11 @@ def _parse_line(line: str) -> ConntrackFlow | None:
+ 
+     src = dst = None
+     sport = dport = None
++    # AI-Perimeter: the first bytes= on the line is the original direction
++    # (upload), the second the reply direction. A line without them
++    # (accounting off) gives 0; a malformed number skips the flow, it never
++    # raises. No early break: bytes= comes after dport= on the line.
++    byte_counts: list[int] = []
+     for token in parts:
+         if src is None and token.startswith("src="):
+             src = token[4:]
+@@ -124,12 +135,18 @@ def _parse_line(line: str) -> ConntrackFlow | None:
+             sport = _to_int(token[6:])
+         elif dport is None and token.startswith("dport="):
+             dport = _to_int(token[6:])
+-        if src is not None and dst is not None and sport is not None and dport is not None:
+-            break
++        # AI-Perimeter: collect the per-direction byte counters (see above).
++        elif token.startswith("bytes="):
++            count = _to_int(token[6:])
++            if count is None:
++                return None
++            byte_counts.append(count)
+ 
+     if src is None or dst is None or sport is None or dport is None:
+         return None
+-    return ConntrackFlow(proto=proto, src=src, sport=sport, dst=dst, dport=dport)
++    byte_counts += [0, 0]
++    return ConntrackFlow(proto=proto, src=src, sport=sport, dst=dst, dport=dport,
++                         bytes_out=byte_counts[0], bytes_in=byte_counts[1])
+ 
+ 
+ def _to_int(value: str) -> int | None:
+diff --git a/frfw/helper/server.py b/frfw/helper/server.py
+index ee3ae61..a8ed4dc 100644
+--- a/frfw/helper/server.py
++++ b/frfw/helper/server.py
+@@ -541,7 +541,11 @@ def _handle_conntrack_sample(server: "ApplyHelperServer") -> dict:
+     macs = ids_quarantine.lan_neighbours(_lan_devices(server), "-6") if any(":" in f.src for f in flows) else {}
+     out = []
+     for f in flows:
+-        flow = {"proto": f.proto, "src": f.src, "sport": f.sport, "dst": f.dst, "dport": f.dport}
++        # AI-Perimeter: the per-flow byte counters for the opt-in upload
++        # collector. No new command, no change to peer.py: conntrack_sample
++        # just carries two more numbers per flow.
++        flow = {"proto": f.proto, "src": f.src, "sport": f.sport, "dst": f.dst, "dport": f.dport,
++                "bytes_out": f.bytes_out, "bytes_in": f.bytes_in}
+         if ":" in f.src:
+             try:
+                 mac = macs.get(str(ipaddress.ip_address(f.src)))
