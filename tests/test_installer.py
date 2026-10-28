@@ -55,7 +55,9 @@ def test_the_bundle_holds_the_wheel_units_and_sums(bundle):
     wheel = [f for f in files if f.endswith(".whl")]
     assert len(wheel) == 1
     assert files == sorted(["SHA256SUMS", "install.sh", wheel[0], "systemd/fr-ai-assist.service",
-                            "systemd/fr-ai-assist.socket", "systemd/fr-webui.service.d/ai-perimeter.conf"])
+                            "systemd/fr-ai-assist.socket", "systemd/fr-ai-upload.service",
+                            "systemd/fr-webui.service.d/ai-perimeter.conf",
+                            "patches/conntrack-bytes.patch"])
     subprocess.run(["sha256sum", "--strict", "-c", "SHA256SUMS"], cwd=root, check=True,
                    capture_output=True)
     listed = {line.split("  ", 1)[1] for line in (root / "SHA256SUMS").read_text().splitlines()}
@@ -70,7 +72,7 @@ def test_the_wheel_has_the_templates_and_commands(bundle):
         names = whl.namelist()
         entry_points = whl.read(next(n for n in names if n.endswith("entry_points.txt"))).decode()
     assert "ai_perimeter/webui/templates/ai_perimeter.html" in names
-    for command in ("fr-ai-assist", "fr-webui-ai"):
+    for command in ("fr-ai-assist", "fr-ai-upload", "fr-webui-ai"):
         assert f"{command} = " in entry_points
 
 
@@ -101,5 +103,23 @@ def test_outside_fr_os_nothing_is_installed(bundle):
 def test_help_and_unknown_arguments():
     help_ = subprocess.run([str(INSTALLER / "install.sh"), "--help"], capture_output=True, text=True)
     assert help_.returncode == 0 and "--uninstall" in help_.stdout and "--purge" in help_.stdout
+    assert "--with-upload-bytes" in help_.stdout
     bad = subprocess.run([str(INSTALLER / "install.sh"), "--yes-please"], capture_output=True, text=True)
     assert bad.returncode == 2
+
+
+def test_with_upload_bytes_outside_fr_os_nothing_is_installed(bundle):
+    """With the flag but no FR_OS (or no root): it stops before changing
+    anything, like a plain install."""
+    _tarball, root = bundle
+    result = subprocess.run([str(root / "install.sh"), "--with-upload-bytes"],
+                            capture_output=True, text=True)
+    assert result.returncode == 1
+    assert "run as root" in result.stderr or "not an FR_OS router" in result.stderr
+
+
+def test_the_bundled_patch_is_the_integration_patch(bundle):
+    """The patch install.sh applies is the marked integration patch."""
+    _tarball, root = bundle
+    bundled = (root / "patches" / "conntrack-bytes.patch").read_bytes()
+    assert bundled == (ROOT / "integration" / "fr_os" / "conntrack-bytes.patch").read_bytes()

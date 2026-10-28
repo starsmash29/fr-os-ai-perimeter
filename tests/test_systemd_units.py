@@ -133,3 +133,64 @@ def test_fr_webui_ai_is_a_console_script():
 
     pyproject = tomllib.loads((SYSTEMD.parent / "pyproject.toml").read_text())
     assert pyproject["project"]["scripts"]["fr-webui-ai"] == "ai_perimeter.webui.server:main"
+
+
+# --- fr-ai-upload.service: the opt-in upload-bytes collector ------------------
+#
+# security-lessons A1, I1: it runs as FR_OS's sensor account (the helper
+# already allows that uid the read-only conntrack_sample command) in the
+# same sandbox as fr-ai-assist, with no network of its own.
+
+UPLOAD = "fr-ai-upload.service"
+
+UPLOAD_SANDBOX = {
+    **{k: v for k, v in SANDBOX.items() if k != "DynamicUser"},
+    "User": "fr_os-sensor",
+    "StateDirectory": "fr_os-ai-perimeter",
+    "IPAddressDeny": "any",
+    "UMask": "0027",
+}
+
+
+@pytest.mark.parametrize("key, value", sorted(UPLOAD_SANDBOX.items()))
+def test_the_upload_collector_is_sandboxed(key, value):
+    assert one(section(UPLOAD, "[Service]"), key) == value
+
+
+def test_the_upload_collector_has_no_dynamic_account():
+    assert "DynamicUser" not in section(UPLOAD, "[Service]")
+
+
+def test_the_upload_collector_reaches_only_the_helper_socket():
+    s = section(UPLOAD, "[Service]")
+    assert one(s, "RestrictAddressFamilies").split() == ["AF_UNIX"]
+    # No PrivateNetwork: the collector must reach the helper's socket, so the
+    # namespace stays; IPAddressDeny keeps it from any IP address instead.
+    assert "PrivateNetwork" not in s
+
+
+def test_the_upload_collector_is_off_unless_accounting_is_on():
+    unit = section(UPLOAD, "[Unit]")
+    assert one(unit, "ConditionPathExists") == "/etc/sysctl.d/60-ai-perimeter.conf"
+
+
+def test_fr_ai_upload_is_a_console_script():
+    import tomllib
+
+    pyproject = tomllib.loads((SYSTEMD.parent / "pyproject.toml").read_text())
+    scripts = pyproject["project"]["scripts"]
+    assert scripts["fr-ai-upload"] == "ai_perimeter.upload.collector:main"
+    s = section(UPLOAD, "[Service]")
+    assert one(s, "ExecStart") == "fr-ai-upload"
+
+
+@pytest.mark.skipif(not shutil.which("systemd-analyze"), reason="needs systemd-analyze")
+def test_systemd_scores_the_upload_exposure_low():
+    out = subprocess.run(
+        ["systemd-analyze", "security", "--offline=yes", "--threshold=20",
+         str(SYSTEMD / UPLOAD)],
+        capture_output=True, text=True, check=False)
+    line = [l for l in out.stdout.splitlines() if "Overall exposure level" in l]
+    assert line, out.stdout + out.stderr
+    score = float(line[0].split("level for fr-ai-upload.service:")[1].split()[0])
+    assert score <= 2.0, line[0]

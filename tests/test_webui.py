@@ -348,5 +348,8 @@ def test_fr_webui_ai_runs_fr_os_main_with_the_screen(tmp_path, monkeypatch):
 
 
 def test_no_fr_os_file_is_patched():
-    """The integration changes no FR_OS file (FR_OS integrity, SEC-15)."""
-    assert not list((Path(__file__).parent.parent / "integration").rglob("*.patch"))
+    """The only FR_OS change is the documented opt-in conntrack patch
+    (FR_OS integrity, SEC-15): nothing else may appear under integration/."""
+    root = Path(__file__).parent.parent / "integration"
+    patches = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.patch"))
+    assert patches == ["fr_os/conntrack-bytes.patch"]
