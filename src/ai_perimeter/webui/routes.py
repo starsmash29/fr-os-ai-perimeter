@@ -243,10 +243,13 @@ def _named(text: str, names: dict[str, str]) -> str:
 
 def _explanation(result: dict[str, Any], bundle: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
     """The service's answer, re-read: only known fields, as text, with the
-    device's name put back for the admin's eyes only -- the
-    ``suggested_intent`` prefilled into the request box keeps the
-    pseudonym, so proposing it sends the model no name, address or MAC
-    (review2 F2). Every free-text field is bidi-stripped (review2 C19)."""
+    device's name put back. The pseudonym protects the *evidence* the
+    explaining model reads; the ``suggested_intent`` prefilled into the
+    request box carries the real name on purpose, because proposing it is
+    the ordinary propose path, whose model already sees the config's DHCP
+    reservations (names and addresses) and must know which device to
+    target. A ``device-1`` there would name nothing it can find (review2
+    F2, corrected). Every free-text field is bidi-stripped (review2 C19)."""
     status = result.get("status")
     if status not in ("ready", "refused"):
         raise AssistError("the AI-Perimeter service's answer was malformed")
@@ -261,8 +264,7 @@ def _explanation(result: dict[str, Any], bundle: dict[str, Any], names: dict[str
         "severity_raised": result.get("severity_raised") is True,
         "summary": evidence.strip_bidi_controls(_named(str(result.get("summary") or ""), names)),
         "evidence": [{"id": i, "item": {k: v for k, v in items[i].items() if k != "id"}} for i in cited],
-        "suggested_intent": suggested[:MAX_INTENT],
-        "suggested_intent_shown": evidence.strip_bidi_controls(_named(suggested, names))[:MAX_INTENT],
+        "suggested_intent": evidence.strip_bidi_controls(_named(suggested, names))[:MAX_INTENT],
         "controls": _strings(result.get("controls"), 10),
         "nis2_note": evidence.strip_bidi_controls(str(result.get("nis2_note") or "")),
         "steps": _strings(result.get("steps"), 10),
