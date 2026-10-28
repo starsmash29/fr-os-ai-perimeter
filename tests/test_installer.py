@@ -293,3 +293,19 @@ def test_the_accounting_marker_is_not_in_the_collectors_state_directory():
     assert owned.startswith("/etc/fr_os/")
     assert not owned.startswith("/var/lib/fr_os-ai-perimeter")
     assert "0|1) ;;" in text
+
+
+def test_uninstall_without_the_patch_file_warns_loudly(tmp_path):
+    """Review2 uninstall: --with-upload-bytes was used (FR_OS's conntrack
+    carries bytes_out) but the bundle's patch file is gone: uninstall warns
+    that FR_OS keeps the patch and how to restore it, instead of skipping
+    silently. Uninstall itself still succeeds."""
+    root, env = _upload_fakes(tmp_path, conntrack_has_bytes_out=True, acct_value="1")
+    (root / "bundle" / "patches" / "conntrack-bytes.patch").unlink()
+    result = _run_upload_fn(root, env, "remove_upload_bytes")
+    assert result.returncode == 0, result.stderr
+    assert "WARNING" in result.stdout
+    assert "frfw/conntrack.py" in result.stdout
+    assert "frfw/helper/server.py" in result.stdout
+    assert "reinstall" in result.stdout
+    assert (root / "patch-calls").read_text() == "", "no patch file, no revert attempted"
