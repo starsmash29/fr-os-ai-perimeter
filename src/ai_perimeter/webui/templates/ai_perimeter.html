@@ -57,7 +57,8 @@
   <h3>What did the router see?</h3>
   {% if suspects %}
   <p class="muted">Devices FR_OS's sensors flagged in the last 24 hours. An explanation sends the model
-    this device's evidence under a pseudonym: no address, MAC or name.</p>
+    this device's evidence under a pseudonym: no address, MAC or name. A change you then propose
+    names the device, like every proposal: that model sees the config's DHCP reservations.</p>
   <table>
     <thead><tr><th>Device</th><th>Why it is listed</th><th>AI services</th><th class="ap-seen">Last seen</th><th></th></tr></thead>
     <tbody>
@@ -96,8 +97,8 @@
   <h4>Related controls</h4>
   <p class="ap-controls">{% for c in explanation.controls %}<span class="badge">{{ c }}</span> {% endfor %}</p>
   {% if explanation.nis2_note %}<p class="ap-callout"><span class="badge badge-blue">NIS2</span> {{ explanation.nis2_note }}</p>{% endif %}
-  {% if explanation.suggested_intent_shown %}
-  <p class="ap-suggest">Suggested change, copied into the request box below under its pseudonym: <em>{{ explanation.suggested_intent_shown }}</em>. Nothing changes until you propose, review and save it.</p>
+  {% if explanation.suggested_intent %}
+  <p class="ap-suggest">Suggested change, copied into the request box below: <em>{{ explanation.suggested_intent }}</em>. Nothing changes until you propose, review and save it.</p>
   {% endif %}
   {% else %}
   <h3>No explanation <span class="badge badge-red">refused</span></h3>
