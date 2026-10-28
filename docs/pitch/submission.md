@@ -101,10 +101,15 @@ results on main before adding performance or safety claims.
 
 ## Next work
 
-An anomaly explainer and Shadow AI upload detection are planned extensions.
-They are not part of the working orchestrator described above.
+Done since the draft above: the anomaly explainer (A4) is built -- a
+pseudonymised evidence bundle from FR_OS's AI IDS, App-ID, TLS JA4 and DNS
+signals, explained by the model in a checked, read-only loop -- and so is
+Shadow AI upload detection: per-device upload bytes, counted opt-in by the
+`fr-ai-upload` collector, attributed to AI services per device, flagging
+over 50 MB in 24 hours.
 
-TODO(claude): not built yet
+What remains is live-model measurement: run the incident suite against the
+selected providers and record verdicts, timing and safety behaviour.
 
 The central design is already visible in the implementation: model output becomes
 a proposal that a person can inspect, while deterministic checks and explicit

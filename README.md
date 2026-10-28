@@ -32,7 +32,7 @@ never executes anything:
 | | Feature | Status |
 |---|---|---|
 | 1 | **Natural Language Network Orchestrator:** intent → patch for rules, ZTNA and WireGuard → validate → lint → diff → approve → apply with rollback | proposals (A2), the webUI screen (A3), the installer and the evaluation harness (A5) done; measured results next |
-| 2 | **Edge Anomaly Explainer:** a pseudonymised evidence bundle from FR_OS's AI IDS, App-ID, TLS JA4 and DNS signals → a short incident explanation with NIS2 / NIST SP 800-53 control references; Shadow AI use (AI services per device) | explainer, Shadow AI use, the screen part, demo data and the measured explanation eval (A4) done; per-device upload bytes next |
+| 2 | **Edge Anomaly Explainer:** a pseudonymised evidence bundle from FR_OS's AI IDS, App-ID, TLS JA4 and DNS signals → a short incident explanation with NIS2 / NIST SP 800-53 control references; Shadow AI use (AI services per device) | explainer, Shadow AI use and (opt-in) per-device upload bytes, the screen part, demo data and the measured explanation eval (A4) done |
 
 ## Models
 
@@ -220,12 +220,14 @@ does not report an end-to-end deployment test.
 Above the request box, the screen lists the devices FR_OS's sensors flagged in the last
 24 hours: an AI IDS anomaly event, use of an AI service (Shadow AI: FR_OS App-ID's `ai`
 category plus Gemini, Claude, Copilot, Perplexity, DeepSeek, Mistral and Meta AI seen in the
-resolver's query log), or a TLS fingerprint on the blocklist. An admin clicks **Explain**:
+resolver's query log), a TLS fingerprint on the blocklist, or -- on routers that opted
+into upload counting -- over 50 MB uploaded to AI services in 24 hours. An admin clicks
+**Explain**:
 
 1. The webUI builds the device's **evidence bundle** from FR_OS's own sensor files
    (`incident/evidence.py`). The device is `device-1`: its address, MAC and name never
    reach the model, and every sensor string is cut short and scrubbed of addresses. Every
-   item has an id (`ids-1`, `ai-1`, `tls-1`, `dns-1`). No packet contents exist to send.
+   item has an id (`ids-1`, `ai-1`, `tls-1`, `dns-1`, `up-1`). No packet contents exist to send.
 2. `fr-ai-assist` runs a short **read-only agent loop** (`incident/explain.py`): the model
    sees an overview, asks for up to four evidence sections, then answers in a closed JSON
    format. Its "tools" are lookups in the bundle; nothing else is reachable.
@@ -239,8 +241,12 @@ resolver's query log), or a TLS fingerprint on the blocklist. An admin clicks **
 5. A suggested change goes into **What should change?** as words, with the device's real
    name. Nothing happens until the admin proposes it, reviews the result and saves it.
 
-Not yet: bytes uploaded per device (it needs FR_OS's conntrack accounting, an FR_OS
-change), so Shadow AI is measured as use and its timing, not volume.
+Bytes uploaded per device are counted too, on routers that opted in
+(`installer/install.sh --with-upload-bytes`): conntrack accounting plus a two-file FR_OS
+patch feed the `fr-ai-upload` collector, and the evidence maps each upload destination back
+to the AI service this device's own resolver replies named -- never an address. Over
+50 MB to AI services in 24 hours flags the device, with the note that short flows between
+samples are not seen, so every total is "at least".
 
 ### How a proposal is judged
 

@@ -18,6 +18,7 @@ format cannot drift):
 | `ai_ids_state.json` | fr-ai-ids recent events |
 | `iot_inventory.json` | fr-iot-scan inventory |
 | `queries.log` | dnsmasq `log-queries=extra` |
+| `upload.json` | fr-ai-upload totals (home scenario only) |
 
 ## Office scenario (`--scenario office`)
 

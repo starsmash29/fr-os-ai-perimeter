@@ -16,22 +16,26 @@ Why it is built here and not by the model (FR_OS security-lessons A1, G11):
   TLS server name, a fingerprint label) is cut short, reduced to printable
   ASCII and scrubbed of anything shaped like an address, so a cloud model
   gets the household's *pattern* of traffic, not its identities.
-- **Every item has an id** (``ids-1``, ``ai-2``, ``tls-1``, ``dns-1``). An
-  explanation may only cite ids that are in the bundle.
+- **Every item has an id** (``ids-1``, ``ai-2``, ``tls-1``, ``dns-1``,
+  ``up-1``). An explanation may only cite ids that are in the bundle.
 - **No packet contents**: FR_OS never keeps any.
 
 Shadow AI is the use of AI services nobody approved. FR_OS's App-ID knows
 the ``ai`` category of its catalog; :data:`AI_SERVICES` adds the other
 widely used assistants, matched in the resolver's query log. Bytes uploaded
-per device are not counted (that needs ``nf_conntrack_acct`` and a root
-read, a FR_OS change): the signal is use, its timing and its volume of
-lookups.
+per device are counted, on routers that opted in, by the ``fr-ai-upload``
+collector (conntrack accounting plus a two-file FR_OS patch): the
+``ai_upload`` section maps each upload destination back to the name this
+device's own resolver replies gave it, keeps AI services only, and never
+carries an address. Over :data:`UPLOAD_ALERT_BYTES` to AI services in 24 h
+flags the device (reason ``ai_upload``).
 """
 
 from __future__ import annotations
 
 import collections
 import ipaddress
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -58,9 +62,16 @@ DNS_TAIL_BYTES = 2 * 1024 * 1024
 MAX_ITEMS = 10
 MAX_DOMAINS = 12
 MAX_TEXT = 80
+#: Bytes uploaded to AI services in 24 h that flag the device (reason
+#: "ai_upload").
+UPLOAD_ALERT_BYTES = 50 * 1024 * 1024
+#: Every upload total is "at least": a flow that opens and closes between
+#: two 15 s samples is not seen.
+UPLOAD_NOTE = "at least; closed short flows between samples are not seen"
 
-SECTIONS = ("ids_events", "ai_usage", "tls_fingerprints", "dns_summary")
-ID_PREFIX = {"ids_events": "ids", "ai_usage": "ai", "tls_fingerprints": "tls", "dns_summary": "dns"}
+SECTIONS = ("ids_events", "ai_usage", "tls_fingerprints", "dns_summary", "ai_upload")
+ID_PREFIX = {"ids_events": "ids", "ai_usage": "ai", "tls_fingerprints": "tls",
+             "dns_summary": "dns", "ai_upload": "up"}
 SUBJECT = "device-1"
 
 
@@ -99,6 +110,9 @@ class Sources:
     tls: Path = fr_paths.TLSFP_STATE_PATH
     devices: Path = fr_paths.IOT_INVENTORY_PATH
     dns: Path = fr_paths.DNS_QUERY_LOG_PATH
+    #: fr-ai-upload's totals (upload.collector.OUTPUT_PATH; kept as a
+    #: literal so this module never imports the collector).
+    upload: Path = Path("/var/lib/fr_os-ai-perimeter/upload.json")
 
 
 @dataclass
@@ -115,6 +129,7 @@ class Signals:
     dns_queries: int = 0
     dns_nxdomain: int = 0
     domains: collections.Counter = field(default_factory=collections.Counter)
+    upload: list[dict[str, Any]] = field(default_factory=list)
 
     def reasons(self) -> list[str]:
         out = []
@@ -124,10 +139,13 @@ class Signals:
             out.append("ai_service")
         if any(t["type"] == "blocklist" for t in self.tls):
             out.append("tls_blocklist")
+        if sum(u["bytes_out"] for u in self.upload) > UPLOAD_ALERT_BYTES:
+            out.append("ai_upload")
         return out
 
     def last_seen(self) -> float:
-        times = [e["ts"] for e in self.ids + self.tls] + [a["last_seen"] for a in self.ai]
+        times = [e["ts"] for e in self.ids + self.tls] + [a["last_seen"] for a in self.ai] \
+            + [u["last"] for u in self.upload]
         return max(times, default=0.0)
 
 
@@ -136,6 +154,8 @@ class Signals:
 _DNS_QUERY_RE = re.compile(
     r"\d+ (?P<client>[0-9A-Fa-f:.]+)/\d+ query\[[A-Za-z0-9]+\] (?P<name>\S+) from \S+\Z")
 _DNS_NXDOMAIN_RE = re.compile(r"\d+ (?P<client>[0-9A-Fa-f:.]+)/\d+ (?:reply|cached) \S+ is NXDOMAIN\Z")
+_DNS_REPLY_RE = re.compile(
+    r"\d+ (?P<client>[0-9A-Fa-f:.]+)/\d+ reply (?P<name>\S+) is (?P<addr>\S+)\Z")
 
 
 def collect(sources: Sources = Sources(), *, now: float | None = None) -> dict[str, Signals]:
@@ -149,6 +169,23 @@ def collect(sources: Sources = Sources(), *, now: float | None = None) -> dict[s
         if ip is None:
             return None
         return clients.setdefault(ip, Signals(ip=ip))
+
+    def upload_client(device: Any) -> Signals | None:
+        """The client an upload row belongs to: its IP, or the client
+        already known by its MAC. A MAC no sensor reported stays
+        unattributed: uploads join a device the evidence can identify."""
+        ip = _ip(device)
+        if ip is not None:
+            return clients.setdefault(ip, Signals(ip=ip))
+        if not isinstance(device, str):
+            return None
+        want = _mac_key(device)
+        if not want:
+            return None
+        for s in clients.values():
+            if s.mac and _mac_key(s.mac) == want:
+                return s
+        return None
 
     for event in load_recent_events(sources.ids):
         ts = _number(event.get("ts"))
@@ -180,7 +217,11 @@ def collect(sources: Sources = Sources(), *, now: float | None = None) -> dict[s
         if s is not None:
             s.tls.append({**event, "ts": ts})
 
-    _read_dns(sources.dns, client, AppMatcher(catalog), names, now)
+    matcher = AppMatcher(catalog)
+    replies: dict[str, dict[str, str]] = {}
+    _read_dns(sources.dns, client, matcher, names, now, replies)
+    ai_ids = {a.id for a in catalog.apps if a.category == "ai"}
+    _read_upload(sources.upload, upload_client, replies, matcher, ai_ids, names, since)
 
     inventory = load_inventory(sources.devices) or {}
     for device in inventory.get("devices", []) if isinstance(inventory.get("devices"), list) else []:
@@ -211,9 +252,12 @@ def _usage_row(app_id: str, name: str, row: dict[str, Any], now: float) -> dict[
             "active": row.get("active") is True}
 
 
-def _read_dns(path: Path, client, matcher: AppMatcher, names: dict[str, str], now: float) -> None:
-    """Query and NXDOMAIN counts per client, the names it looked up, and
-    AI services the App-ID snapshot didn't already report."""
+def _read_dns(path: Path, client, matcher: AppMatcher, names: dict[str, str], now: float,
+            replies: dict[str, dict[str, str]]) -> None:
+    """Query and NXDOMAIN counts per client, the names it looked up, AI
+    services the App-ID snapshot didn't already report, and -- per client
+    -- the addresses its replies mapped names to (first reply wins), for
+    the upload attribution below."""
     try:
         with path.open("rb") as fh:
             fh.seek(0, 2)
@@ -242,12 +286,72 @@ def _read_dns(path: Path, client, matcher: AppMatcher, names: dict[str, str], no
             s = client(nx.group("client"))
             if s is not None:
                 s.dns_nxdomain += 1
+            continue
+        reply = _DNS_REPLY_RE.match(message)
+        if reply:
+            s = client(reply.group("client"))
+            addr = _ip(reply.group("addr"))
+            if s is not None and addr is not None:
+                name = reply.group("name").lower().rstrip(".")
+                replies.setdefault(s.ip, {}).setdefault(addr, name)
     for (ip, app), hits in lookups.items():
         s = client(ip)
         if any(a["app"] == app for a in s.ai):
             continue
         s.ai.append({"app": app, "service": names[app], "source": "dns", "hits": hits,
                      "night_hits": None, "first_seen": None, "last_seen": now, "active": None})
+
+
+def _read_upload(path: Path, upload_client, replies: dict[str, dict[str, str]],
+                 matcher: AppMatcher, ai_ids: set[str], names: dict[str, str],
+                 since: float) -> None:
+    """Per-service upload bytes per client, from fr-ai-upload's totals. A
+    row counts only when the client's own replies map its destination to a
+    name App-ID puts in the "ai" category; anything else -- another
+    client's reply, a non-AI name, a misshapen row -- is skipped. A missing
+    or broken file means no upload signal, never an error."""
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return
+    rows = doc.get("devices") if isinstance(doc, dict) else None
+    if not isinstance(rows, list):
+        return
+    acc: dict[tuple[str, str], tuple[Signals, dict[str, Any]]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        s = upload_client(row.get("device"))
+        if s is None:
+            continue
+        dst = _ip(row.get("dst"))
+        if dst is None:
+            continue
+        name = replies.get(s.ip, {}).get(dst)
+        if name is None:
+            continue
+        app = matcher.match(name)
+        if app is None or app not in ai_ids:
+            continue
+        out = _count(row.get("bytes_out"))
+        inn = _count(row.get("bytes_in"))
+        flows = _count(row.get("flows"))
+        last = _number(row.get("last"))
+        if out is None or inn is None or flows is None or last is None or last < since:
+            continue
+        first = _number(row.get("first")) or last
+        key = (s.ip, app)
+        if key not in acc:
+            acc[key] = (s, {"service": names[app], "bytes_out": 0, "bytes_in": 0,
+                            "flows": 0, "first": first, "last": last})
+        _s, item = acc[key]
+        item["bytes_out"] += out
+        item["bytes_in"] += inn
+        item["flows"] += flows
+        item["first"] = min(item["first"], first)
+        item["last"] = max(item["last"], last)
+    for _key, (s, item) in acc.items():
+        s.upload.append(item)
 
 
 # --- the screen's list and the bundle -------------------------------------------------------
@@ -305,6 +409,12 @@ def build_bundle(ip: str, sources: Sources = Sources(), *, now: float | None = N
         sections["dns_summary"].append({
             "lookups": s.dns_queries, "nxdomain": s.dns_nxdomain,
             "top_names": [[text(n), c] for n, c in s.domains.most_common(MAX_DOMAINS)]})
+    for u in sorted(s.upload, key=lambda u: -u["bytes_out"])[:MAX_ITEMS]:
+        sections["ai_upload"].append({
+            "service": text(u["service"]), "bytes_out": u["bytes_out"],
+            "bytes_in": u["bytes_in"], "flows": u["flows"],
+            "first": _when(u["first"]), "last": _when(u["last"]),
+            "note": UPLOAD_NOTE})
     for name, items in sections.items():
         for n, item in enumerate(items, 1):
             item["id"] = f"{ID_PREFIX[name]}-{n}"
@@ -360,6 +470,17 @@ def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+def _count(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _mac_key(value: str) -> str:
+    """A MAC for comparison: hex digits only, lowercase."""
+    return re.sub(r"[^0-9a-f]", "", value.lower())
 
 
 def _when(ts: float | None) -> str | None:
