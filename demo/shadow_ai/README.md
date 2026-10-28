@@ -33,6 +33,13 @@ that don't exist. The XDP filter drops the loader's connections in the kernel,
 before they reach the internet. The reception PC (192.168.10.41) stays ordinary
 background.
 
+The office scene runs on its own config, [`office.yaml`](office.yaml): the demo
+home network plus the DHCP reservations of `design-laptop` and `reception-pc`,
+so the suggested change ("Cut design-laptop off the internet") can be proposed
+and saved. The evaluation's results were measured on `home.yaml`, which stays
+unchanged; `tests/test_incident_webui.py` checks that the two files differ by
+those two reservations only.
+
 The actor's name appears only in the threat-feed label on the blocklisted
 fingerprint, as it would in real life. The AI IDS events are not written by
 hand: the script feeds one window of traffic per device to FR_OS's own
