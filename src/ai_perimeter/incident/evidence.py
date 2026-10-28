@@ -38,6 +38,7 @@ from __future__ import annotations
 import collections
 import ipaddress
 import json
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -166,7 +167,11 @@ _DNS_QUERY_RE = re.compile(
     r"\d+ (?P<client>[0-9A-Fa-f:.]+)/\d+ query\[[A-Za-z0-9]+\] (?P<name>\S+) from \S+\Z")
 _DNS_NXDOMAIN_RE = re.compile(r"\d+ (?P<client>[0-9A-Fa-f:.]+)/\d+ (?:reply|cached) \S+ is NXDOMAIN\Z")
 _DNS_REPLY_RE = re.compile(
-    r"\d+ (?P<client>[0-9A-Fa-f:.]+)/\d+ reply (?P<name>\S+) is (?P<addr>\S+)\Z")
+    r"\d+ (?P<client>[0-9A-Fa-f:.]+)/\d+ (?:reply|cached) (?P<name>\S+) is (?P<addr>\S+)\Z")
+#: dnsmasq's syslog-line prefix on every query-log line: "Oct 20 01:00:00
+#: dnsmasq[489]: " (the same shape FR_OS's dnsmasq_message strips).
+_DNS_PREFIX_RE = re.compile(
+    r"^(?P<stamp>[A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d) dnsmasq\[\d+\]: ")
 
 
 def collect(sources: Sources = Sources(), *, now: float | None = None) -> dict[str, Signals]:
@@ -181,25 +186,31 @@ def collect(sources: Sources = Sources(), *, now: float | None = None) -> dict[s
             return None
         return clients.setdefault(ip, Signals(ip=ip))
 
-    def upload_client(device: Any) -> Signals | None:
-        """The client an upload row belongs to: its IP, or the client
-        already known by its MAC. A MAC no sensor reported stays
-        unattributed: uploads join a device the evidence can identify."""
-        ip = _ip(device)
+    def upload_client(row: Any) -> Signals | None:
+        """The client an upload row belongs to (review F5): its "device"
+        is the source IP and wins; the "mac" field is only a fallback onto
+        a client the sensors already know by MAC (as is a "device" holding
+        a MAC, the old collector's shape). A MAC no sensor reported stays
+        unattributed: uploads join a device the evidence can identify, and
+        never another client."""
+        if not isinstance(row, dict):
+            return None
+        ip = _ip(row.get("device"))
         if ip is not None:
             return clients.setdefault(ip, Signals(ip=ip))
-        if not isinstance(device, str):
-            return None
-        want = _mac_key(device)
-        if not want:
-            return None
-        for s in clients.values():
-            if s.mac and _mac_key(s.mac) == want:
-                return s
+        for candidate in (row.get("mac"), row.get("device")):
+            if not isinstance(candidate, str):
+                continue
+            want = _mac_key(candidate)
+            if not want:
+                continue
+            for s in clients.values():
+                if s.mac and _mac_key(s.mac) == want:
+                    return s
         return None
 
     for event in load_recent_events(sources.ids):
-        ts = _number(event.get("ts"))
+        ts = _number(event.get("ts"), now)
         s = client(event.get("ip"))
         if s is None or ts is None or ts < since:
             continue
@@ -214,14 +225,14 @@ def collect(sources: Sources = Sources(), *, now: float | None = None) -> dict[s
             continue
         for ip, row in app["clients"].items():
             s = client(ip)
-            last = _number(row.get("last_seen")) if isinstance(row, dict) else None
+            last = _number(row.get("last_seen"), now) if isinstance(row, dict) else None
             if s is None or last is None or last < since:
                 continue
             s.ai.append(_usage_row(app_id, names[app_id], row, now))
 
     tls = load_tls_state(sources.tls)
     for event in tls.get("events", []) if isinstance(tls.get("events"), list) else []:
-        ts = _number(event.get("ts")) if isinstance(event, dict) else None
+        ts = _number(event.get("ts"), now) if isinstance(event, dict) else None
         if ts is None or ts < since or event.get("type") not in ("new_fingerprint", "blocklist"):
             continue
         s = client(event.get("client"))
@@ -231,9 +242,9 @@ def collect(sources: Sources = Sources(), *, now: float | None = None) -> dict[s
     matcher = AppMatcher(catalog)
     replies: dict[str, dict[str, str]] = {}
     _read_dns(sources.dns, client, matcher, names, now, replies)
-    _read_sni(sources.sni, client, since)
+    _read_sni(sources.sni, client, now)
     ai_ids = {a.id for a in catalog.apps if a.category == "ai"}
-    _read_upload(sources.upload, upload_client, replies, matcher, ai_ids, names, since)
+    _read_upload(sources.upload, upload_client, replies, matcher, ai_ids, names, now)
 
     inventory = load_inventory(sources.devices) or {}
     for device in inventory.get("devices", []) if isinstance(inventory.get("devices"), list) else []:
@@ -258,10 +269,32 @@ def _usage_row(app_id: str, name: str, row: dict[str, Any], now: float) -> dict[
         except (TypeError, ValueError, OverflowError):
             continue
     return {"app": app_id, "service": name, "source": "app-id",
-            "hits": int(_number(row.get("hits_24h")) or 0), "night_hits": night,
-            "first_seen": _number(row.get("first_seen")) or now,
-            "last_seen": _number(row.get("last_seen")) or now,
+            "hits": int(_number(row.get("hits_24h"), now) or 0), "night_hits": night,
+            "first_seen": _number(row.get("first_seen"), now) or now,
+            "last_seen": _number(row.get("last_seen"), now) or now,
             "active": row.get("active") is True}
+
+
+def _dns_ts(line: str, now: float) -> float | None:
+    """Epoch seconds of a query-log line's syslog timestamp (review F6),
+    or None when the line carries none. dnsmasq logs no year, so the
+    current one is assumed -- unless that lands in the future, in which
+    case the line is from last December (a Dec 31 -> Jan 1 rollover).
+    Router-local time, like the rest of the bundle."""
+    match = _DNS_PREFIX_RE.match(line)
+    if match is None:
+        return None
+    try:
+        parsed = time.strptime(match.group("stamp"), "%b %d %H:%M:%S")
+    except ValueError:
+        return None
+    year = time.localtime(now).tm_year
+    ts = time.mktime((year, parsed.tm_mon, parsed.tm_mday,
+                      parsed.tm_hour, parsed.tm_min, parsed.tm_sec, 0, 0, -1))
+    if ts > now:
+        ts = time.mktime((year - 1, parsed.tm_mon, parsed.tm_mday,
+                          parsed.tm_hour, parsed.tm_min, parsed.tm_sec, 0, 0, -1))
+    return ts
 
 
 def _read_dns(path: Path, client, matcher: AppMatcher, names: dict[str, str], now: float,
@@ -269,9 +302,16 @@ def _read_dns(path: Path, client, matcher: AppMatcher, names: dict[str, str], no
     """Query and NXDOMAIN counts per client, the names it looked up, AI
     services the App-ID snapshot didn't already report, and -- per client
     -- the addresses its replies mapped names to (first reply wins), for
-    the upload attribution below."""
-    lookups: dict[tuple[str, str], int] = collections.Counter()
+    the upload attribution below. Only lines inside the 24 h window count:
+    older lines are skipped before they can count as fresh evidence, and
+    undated lines are skipped outright, so no row ever gets last_seen=now
+    for data without a time (review F6)."""
+    since = now - WINDOW_SECONDS
+    lookups: dict[tuple[str, str], list] = {}
     for line in _tail(path, DNS_TAIL_BYTES):
+        ts = _dns_ts(line, now)
+        if ts is None or ts < since:
+            continue
         message = dnsmasq_message(line)
         query = _DNS_QUERY_RE.match(message)
         if query:
@@ -283,7 +323,10 @@ def _read_dns(path: Path, client, matcher: AppMatcher, names: dict[str, str], no
             s.domains[name] += 1
             app = matcher.match(name)
             if app is not None:
-                lookups[(s.ip, app)] += 1
+                row = lookups.setdefault((s.ip, app), [0, ts, ts])
+                row[0] += 1
+                row[1] = min(row[1], ts)
+                row[2] = max(row[2], ts)
             continue
         nx = _DNS_NXDOMAIN_RE.match(message)
         if nx:
@@ -298,22 +341,24 @@ def _read_dns(path: Path, client, matcher: AppMatcher, names: dict[str, str], no
             if s is not None and addr is not None:
                 name = reply.group("name").lower().rstrip(".")
                 replies.setdefault(s.ip, {}).setdefault(addr, name)
-    for (ip, app), hits in lookups.items():
+    for (ip, app), (hits, first, last) in lookups.items():
         s = client(ip)
         if any(a["app"] == app for a in s.ai):
             continue
         s.ai.append({"app": app, "service": names[app], "source": "dns", "hits": hits,
-                     "night_hits": None, "first_seen": None, "last_seen": now, "active": None})
+                     "night_hits": None, "first_seen": first, "last_seen": last,
+                     "active": None})
 
 
 def _read_upload(path: Path, upload_client, replies: dict[str, dict[str, str]],
                  matcher: AppMatcher, ai_ids: set[str], names: dict[str, str],
-                 since: float) -> None:
+                 now: float) -> None:
     """Per-service upload bytes per client, from fr-ai-upload's totals. A
     row counts only when the client's own replies map its destination to a
     name App-ID puts in the "ai" category; anything else -- another
     client's reply, a non-AI name, a misshapen row -- is skipped. A missing
     or broken file means no upload signal, never an error."""
+    since = now - WINDOW_SECONDS
     try:
         doc = json.loads(path.read_text())
     except (OSError, ValueError):
@@ -325,7 +370,7 @@ def _read_upload(path: Path, upload_client, replies: dict[str, dict[str, str]],
     for row in rows:
         if not isinstance(row, dict):
             continue
-        s = upload_client(row.get("device"))
+        s = upload_client(row)
         if s is None:
             continue
         dst = _ip(row.get("dst"))
@@ -340,10 +385,10 @@ def _read_upload(path: Path, upload_client, replies: dict[str, dict[str, str]],
         out = _count(row.get("bytes_out"))
         inn = _count(row.get("bytes_in"))
         flows = _count(row.get("flows"))
-        last = _number(row.get("last"))
+        last = _number(row.get("last"), now)
         if out is None or inn is None or flows is None or last is None or last < since:
             continue
-        first = _number(row.get("first")) or last
+        first = _number(row.get("first"), now) or last
         key = (s.ip, app)
         if key not in acc:
             acc[key] = (s, {"service": names[app], "bytes_out": 0, "bytes_in": 0,
@@ -372,13 +417,14 @@ def _tail(path: Path, limit: int) -> list[str]:
     return text.splitlines()[1 if size > limit else 0:]
 
 
-def _read_sni(path: Path, client, since: float) -> None:
+def _read_sni(path: Path, client, now: float) -> None:
     """The kernel's own drops: fr-xdp-sni-logger's event file, one JSON
     object a line (frfw.xdp.format_event_json). Only ``drop`` lines count
     -- a ``pass`` is only logged while an admin is debugging the filter --
     and only the source and the server name are kept: the destination
     address says nothing the server name doesn't, and would be an address
     to scrub. A malformed line is skipped, as fr-ai-ids does."""
+    since = now - WINDOW_SECONDS
     for line in _tail(path, SNI_TAIL_BYTES):
         try:
             event = json.loads(line)
@@ -386,7 +432,7 @@ def _read_sni(path: Path, client, since: float) -> None:
             continue
         if not isinstance(event, dict) or event.get("action") != "drop":
             continue
-        ts = _number(event.get("ts"))
+        ts = _number(event.get("ts"), now)
         name = event.get("sni")
         if ts is None or ts < since or not isinstance(name, str) or not name:
             continue
@@ -424,7 +470,7 @@ def build_bundle(ip: str, sources: Sources = Sources(), *, now: float | None = N
     if s is None:
         raise LookupError("no sensor reported this device in the last 24 hours")
     s.name = _name(s, labels)
-    secrets = {v for v in (s.ip, s.mac, s.name) if len(v) >= 4}
+    secrets = {v for v in (s.ip, s.mac, s.name) if v}
 
     def text(value: Any) -> str:
         return _scrub(value, secrets)
@@ -432,11 +478,11 @@ def build_bundle(ip: str, sources: Sources = Sources(), *, now: float | None = N
     sections: dict[str, list[dict[str, Any]]] = {name: [] for name in SECTIONS}
     for e in sorted(s.ids, key=lambda e: e["ts"])[-MAX_ITEMS:]:
         sections["ids_events"].append({
-            "when": _when(e["ts"]), "score": _number(e.get("score")),
+            "when": _when(e["ts"]), "score": _number(e.get("score"), now),
             "reasons": [text(r) for r in e.get("reasons", [])[:6] if isinstance(r, str)],
-            **{k: _number(e.get(k)) for k in ("conn_rate", "unique_dst_ratio", "sni_block_count",
-                                               "nxdomain_count", "dga_nxdomain_count",
-                                               "dns_threat_count")}})
+            **{k: _number(e.get(k), now) for k in ("conn_rate", "unique_dst_ratio", "sni_block_count",
+                                                  "nxdomain_count", "dga_nxdomain_count",
+                                                  "dns_threat_count")}})
     for a in sorted(s.ai, key=lambda a: -a["hits"])[:MAX_ITEMS]:
         sections["ai_usage"].append({
             "service": text(a["service"]), "seen_by": a["source"], "lookups_24h": a["hits"],
@@ -488,21 +534,57 @@ def evidence_ids(bundle: dict[str, Any]) -> set[str]:
 
 # --- helpers ----------------------------------------------------------------------------
 
-_ADDRESS_RE = re.compile(
-    r"\b(?:\d{1,3}\.){3}\d{1,3}\b"                       # IPv4
-    r"|\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b"            # MAC
-    r"|\b(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}\b",        # IPv6
-    re.IGNORECASE)
+#: A MAC address (either separator), not glued to more hex.
+_MAC_RE = re.compile(r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f])")
+#: An IPv4 quad with word boundaries (dots allowed either side, for
+#: addresses glued into DNS names); validated with ipaddress below.
+_V4_RE = re.compile(r"(?<![\w])([0-9]{1,3}(?:\.[0-9]{1,3}){3})(?![\w])")
+#: A maximal run of what an IP address is written with (review F4).
+_TOKEN_RE = re.compile(r"[0-9A-Fa-f:.]+")
 _UNPRINTABLE_RE = re.compile(r"[^\x20-\x7e]")
 
 
 def _scrub(value: Any, secrets: set[str]) -> str:
     """Untrusted sensor text, made safe to show a model: printable ASCII,
-    short, with no address and none of the device's own identifiers."""
+    short, with no address and none of the device's own identifiers. A
+    secret of any length is scrubbed case-insensitively at token/domain
+    boundaries -- ``nas`` in ``nas.home``, but not inside ``canasta`` --
+    and addresses are parsed, not pattern-matched (review F4)."""
     text = _UNPRINTABLE_RE.sub("?", str(value))[:MAX_TEXT * 2]
     for secret in sorted(secrets, key=len, reverse=True):
-        text = text.replace(secret, SUBJECT)
-    return _ADDRESS_RE.sub("[address]", text)[:MAX_TEXT]
+        if not secret:
+            continue
+        text = re.sub(r"(?<![A-Za-z0-9])" + re.escape(secret) + r"(?![A-Za-z0-9])",
+                      SUBJECT, text, flags=re.IGNORECASE)
+    return _scrub_addresses(text)[:MAX_TEXT]
+
+
+def _scrub_addresses(text: str) -> str:
+    """Every address in the text becomes ``[address]``: MACs by shape, then
+    IPv4/IPv6 by parsing each token with ``ipaddress`` -- so ``::1``,
+    ``::abcd`` and embedded IPv4 (``::ffff:192.0.2.1``) are all caught --
+    then any IPv4 quad left inside a longer dotted run, validated."""
+    text = _MAC_RE.sub("[address]", text)
+    text = _TOKEN_RE.sub(_scrub_token, text)
+    return _V4_RE.sub(lambda m: "[address]" if _valid_ip(m.group(1)) else m.group(0), text)
+
+
+def _scrub_token(match: re.Match[str]) -> str:
+    """One maximal address-alphabet run: an address with dots glued to it
+    (``x.192.168.0.1.nip.io``) is trimmed to the address part first."""
+    token = match.group(0)
+    stripped = token.strip(".")
+    if stripped and _valid_ip(stripped):
+        return token.replace(stripped, "[address]", 1)
+    return token
+
+
+def _valid_ip(token: str) -> bool:
+    try:
+        ipaddress.ip_address(token)
+    except ValueError:
+        return False
+    return True
 
 
 def _ip(value: Any) -> str | None:
@@ -514,14 +596,28 @@ def _ip(value: Any) -> str | None:
         return None
 
 
-def _number(value: Any) -> float | None:
+def _number(value: Any, now: float) -> float | None:
+    """A sensor time (or score) in a sane range (review F10): finite, and
+    ``0 <= t <= now + 1 day``. NaN, infinities (``1e309`` arrives as one),
+    a huge int (``10**400``, whose ``float()`` raises ``OverflowError``),
+    negatives and the far future are not values the sensors could have
+    written, so they are not values at all."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        return None
+    if not math.isfinite(number) or not 0 <= number <= now + 24 * 3600:
+        return None
+    return number
 
 
 def _count(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    """A sensor count in a sane range (review F10): ``0 <= n < 2**63``."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if not 0 <= value < 2**63:
         return None
     return value
 
