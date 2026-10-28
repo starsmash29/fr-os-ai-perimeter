@@ -114,7 +114,7 @@ def test_the_demo_scenario_end_to_end(env, tmp_path):  # noqa: F811
     env["app"].state.ai_perimeter_sources = Sources(
         ids=out / "ai_ids_state.json", appid=out / "appid_usage.json",
         tls=out / "tls_fingerprints.json", devices=out / "iot_inventory.json",
-        dns=out / "queries.log")
+        dns=out / "queries.log", sni=out / "sni_events.jsonl")
     env["app"].state.ai_perimeter_clock = lambda: DEMO_NOW
     client = login(env)
     page = client.get("/ai-perimeter")
@@ -146,7 +146,7 @@ def _office(env, tmp_path):  # noqa: F811
     env["app"].state.ai_perimeter_sources = Sources(
         ids=out / "ai_ids_state.json", appid=out / "appid_usage.json",
         tls=out / "tls_fingerprints.json", devices=out / "iot_inventory.json",
-        dns=out / "queries.log")
+        dns=out / "queries.log", sni=out / "sni_events.jsonl")
     env["app"].state.ai_perimeter_clock = lambda: OFFICE_NOW
     return login(env)
 
