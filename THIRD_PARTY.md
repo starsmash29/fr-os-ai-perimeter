@@ -47,6 +47,7 @@ installs with `--no-deps` and uses the FR_OS packages already on the router.
 | Component | Role | Licence |
 |---|---|---|
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) | Serves a local GGUF model (Muse Glimmer) over an OpenAI-compatible API; installed and run by the operator | [MIT](https://github.com/ggml-org/llama.cpp/blob/master/LICENSE) |
+| [Modal](https://modal.com) | Optional cloud GPU serving Muse Glimmer as a Dedicated Endpoint (`deploy/modal/`); the operator's own account, used only when configured. Nothing from this repository is deployed there | [Modal terms](https://modal.com/legal/terms) |
 
 ## Python requirements inherited from pinned FR_OS
 
