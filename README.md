@@ -260,7 +260,8 @@ Bytes uploaded per device are counted too, on routers that opted in
 patch feed the `fr-ai-upload` collector, and the evidence maps each upload destination back
 to the AI service this device's own resolver replies named -- never an address. Over
 50 MB to AI services in 24 hours flags the device, with the note that short flows between
-samples are not seen, so every total is "at least".
+samples are not seen, so every total is "at least", except a flow that disappears from
+the sample for more than an hour may be recounted once (review2 C1).
 
 ### How a proposal is judged
 

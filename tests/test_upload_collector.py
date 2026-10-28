@@ -15,6 +15,8 @@ import stat
 import threading
 from pathlib import Path
 
+import pytest
+
 from ai_perimeter.upload.collector import (
     MAX_PAIRS,
     WINDOW_SECONDS,
@@ -442,3 +444,198 @@ def test_flow_forgotten_after_an_hour_counts_as_new(tmp_path):
     collector.write(t0 + 30 + 3600 + 1)
     row = by_pair(read(tmp_path))[(LAN, WAN)]
     assert (row["bytes_out"], row["flows"]) == (2000, 2)
+
+
+def test_pairs_stay_bounded_during_update(tmp_path, monkeypatch):
+    """Review2 C2: update() itself keeps at most MAX_PAIRS pairs -- the
+    bound does not wait for write() -- and the survivors are the newest."""
+    import ai_perimeter.upload.collector as collector_mod
+    monkeypatch.setattr(collector_mod, "MAX_PAIRS", 4)
+    collector = direct(tmp_path)
+    t0 = 300000.0
+    collector.update([], t0)
+    flows = [flow(dst=f"10.9.0.{n + 1}", sport=20000 + n, out=100, inn=0)
+             for n in range(8)]
+    collector.update(flows, t0 + 15)
+    assert len(collector.pairs) <= 4
+    collector.write(t0 + 15)
+    pairs = by_pair(read(tmp_path))
+    assert len(pairs) == 4
+    assert {d for (_dev, d) in pairs} == {"10.9.0.5", "10.9.0.6", "10.9.0.7",
+                                          "10.9.0.8"}, "write() keeps the newest ones"
+
+
+def test_two_writes_leave_no_stray_temp_files(tmp_path):
+    """Review2 C3: every write replaces its own unique temp file; nothing
+    is left beside upload.json, at mode 0640."""
+    collector = direct(tmp_path)
+    collector.update([], 310000.0)
+    collector.update([flow(out=10, inn=0)], 310015.0)
+    collector.write(310015.0)
+    collector.write(310030.0)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["upload.json"]
+    assert stat.S_IMODE((tmp_path / "upload.json").stat().st_mode) == 0o640
+
+
+def test_a_failed_write_leaves_the_old_file_and_no_strays(tmp_path, monkeypatch):
+    """Review2 C3: when the rename raises, the previous upload.json is
+    intact and the temp file is unlinked."""
+    collector = direct(tmp_path)
+    collector.update([], 320000.0)
+    collector.update([flow(out=10, inn=0)], 320015.0)
+    collector.write(320015.0)
+    before = (tmp_path / "upload.json").read_text()
+
+    def boom(*args, **kwargs):
+        raise OSError("rename is gone")
+
+    monkeypatch.setattr("ai_perimeter.upload.collector.os.replace", boom)
+    with pytest.raises(OSError, match="rename is gone"):
+        collector.write(320030.0)
+    assert (tmp_path / "upload.json").read_text() == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["upload.json"]
+
+
+@pytest.mark.parametrize("bad", ["0", "-5", "nan", "inf"])
+def test_main_rejects_an_out_of_range_interval(tmp_path, bad, capsys):
+    """Review2 C4: --interval accepts only 1..3600 seconds; anything else
+    exits 2 with a message."""
+    with pytest.raises(SystemExit) as exc:
+        main(["--socket", str(tmp_path / "helper.sock"),
+              "--output", str(tmp_path / "upload.json"),
+              "--interval", bad, "--once"])
+    assert exc.value.code == 2
+    assert "--interval must be 1 to 3600 seconds" in capsys.readouterr().err
+
+
+def test_main_rejects_a_non_numeric_interval(tmp_path):
+    """Review2 C4: a non-number never reaches the check -- argparse exits
+    2 on it, as before."""
+    with pytest.raises(SystemExit) as exc:
+        main(["--socket", str(tmp_path / "helper.sock"),
+              "--output", str(tmp_path / "upload.json"),
+              "--interval", "abc", "--once"])
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("good", ["1", "3600"])
+def test_main_accepts_the_interval_edges(tmp_path, good):
+    """Review2 C4: the edges 1 and 3600 are valid (--once against a
+    missing socket still exits 0: the sample is skipped, not fatal)."""
+    assert main(["--socket", str(tmp_path / "helper.sock"),
+                 "--output", str(tmp_path / "upload.json"),
+                 "--interval", good, "--once"]) == 0
+
+
+def test_uncountable_flows_are_skipped_and_counted(tmp_path):
+    """Review2 C5: proto outside tcp/udp and ports outside 0..65535 never
+    reach the totals; they are skipped, counted, and never raise -- while
+    a valid flow alongside still counts."""
+    collector = direct(tmp_path)
+    t0 = 330000.0
+    collector.update([], t0)
+    junk = [
+        flow(proto="icmp", out=100, inn=0),
+        flow(proto="bogus", out=100, inn=0),
+        flow(sport=-1, out=100, inn=0),
+        flow(dport=70000, out=100, inn=0),
+        flow(sport=2**40, dport=2**40, out=100, inn=0),
+        None, 42, "junk", {"proto": "tcp"}, flow(out="much"),
+    ]
+    collector.update(junk + [flow(sport=40000, out=50, inn=0)], t0 + 15)
+    assert collector.skipped == 5
+    collector.write(t0 + 15)
+    pairs = by_pair(read(tmp_path))
+    assert set(pairs) == {(LAN, WAN)}
+    assert (pairs[(LAN, WAN)]["bytes_out"], pairs[(LAN, WAN)]["flows"]) == (50, 1)
+
+
+def test_totals_saturate_at_the_shared_cap(tmp_path):
+    """Review2 C6: a total that would exceed MAX_COUNT saturates instead of
+    writing a row the evidence reader would drop (>= 2**63)."""
+    from ai_perimeter.upload.collector import MAX_COUNT
+    assert MAX_COUNT == 2**63 - 1
+    collector = direct(tmp_path)
+    collector.update([], 340000.0)
+    collector.update([flow(out=2**63, inn=2**64)], 340015.0)
+    collector.write(340015.0)
+    [row] = read(tmp_path)["devices"]
+    assert row["bytes_out"] == MAX_COUNT
+    assert row["bytes_in"] == MAX_COUNT
+    assert row["flows"] == 1
+
+
+def test_flows_saturate_at_the_shared_cap():
+    """Review2 C6, flows side: unit-level, since 2**63 flows take a while."""
+    from ai_perimeter.upload.collector import MAX_COUNT, _Bucket, _Totals
+    now = 340000.0
+    totals = _Totals()
+    totals.buckets[int(now // 3600)] = _Bucket(bytes_out=0, bytes_in=0,
+                                               flows=MAX_COUNT, first=now,
+                                               last=now)
+    totals.add(now, 0, 0, True)
+    assert totals.flows == MAX_COUNT
+
+
+def test_saturated_rows_survive_the_evidence_count_check():
+    """Review2 C6: what the collector writes, evidence._count accepts --
+    the two sides share one cap."""
+    from ai_perimeter.incident.evidence import _count as evidence_count
+    from ai_perimeter.upload.collector import MAX_COUNT
+    assert evidence_count(MAX_COUNT) == MAX_COUNT
+    assert evidence_count(MAX_COUNT + 1) is None
+
+
+def test_remembered_growth_on_a_live_pair_adds_no_new_flow(tmp_path):
+    """Review2 C7: a remembered (F9) flow reappearing with growth on a live
+    pair adds bytes only -- the flow was counted once already."""
+    collector = direct(tmp_path)
+    t0 = 350000.0
+    collector.update([], t0)
+    collector.update([flow(out=1000, inn=0)], t0 + 15)
+    collector.update([], t0 + 30)
+    collector.update([flow(out=1200, inn=0)], t0 + 45)
+    collector.write(t0 + 45)
+    row = by_pair(read(tmp_path))[(LAN, WAN)]
+    assert (row["bytes_out"], row["flows"]) == (1200, 1)
+
+
+def test_recreated_pair_after_eviction_counts_its_flow(tmp_path, monkeypatch):
+    """Review2 C7: when the pair was evicted while the flow was away, the
+    reappearance re-creates it and counts flows=1 -- no row shows bytes
+    with 0 flows."""
+    import ai_perimeter.upload.collector as collector_mod
+    monkeypatch.setattr(collector_mod, "MAX_PAIRS", 2)
+    collector = direct(tmp_path)
+    t0 = 360000.0
+    collector.update([], t0)
+    collector.update([flow(out=1000, inn=0)], t0 + 15)
+    collector.update([], t0 + 30)  # the flow is remembered, its pair still live
+    others = [flow(dst=f"10.9.1.{n + 1}", sport=30000 + n, out=10, inn=0)
+              for n in range(2)]
+    collector.update(others, t0 + 45)  # two newer pairs evict (LAN, WAN)
+    assert (LAN, WAN) not in collector.pairs
+    collector.update([flow(out=1100, inn=0)], t0 + 60)
+    collector.write(t0 + 60)
+    row = by_pair(read(tmp_path))[(LAN, WAN)]
+    assert (row["bytes_out"], row["flows"]) == (100, 1)
+
+
+def test_growing_flow_recreates_an_evicted_pair_with_its_flow(tmp_path, monkeypatch):
+    """Review2 C7, known-flow side: the pair is evicted while the flow
+    stays quiet; its next growth re-creates the pair and counts it."""
+    import ai_perimeter.upload.collector as collector_mod
+    monkeypatch.setattr(collector_mod, "MAX_PAIRS", 2)
+    collector = direct(tmp_path)
+    t0 = 370000.0
+    collector.update([], t0)
+    collector.update([flow(out=1000, inn=0)], t0 + 15)
+    quiet = [flow(out=1000, inn=0)]
+    quiet += [flow(dst=f"10.9.2.{n + 1}", sport=31000 + n, out=10, inn=0)
+              for n in range(2)]
+    collector.update(quiet, t0 + 30)
+    assert (LAN, WAN) not in collector.pairs
+    collector.update([flow(out=1050, inn=0)], t0 + 45)
+    collector.write(t0 + 45)
+    row = by_pair(read(tmp_path))[(LAN, WAN)]
+    assert (row["bytes_out"], row["flows"]) == (50, 1)

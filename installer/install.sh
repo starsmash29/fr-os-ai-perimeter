@@ -265,9 +265,15 @@ remove_upload_bytes() {
         fi
     fi
     frfw_dir=$("$PYTHON" -c 'import frfw, os; print(os.path.dirname(frfw.__file__))' 2>/dev/null) || true
-    if [ -n "${frfw_dir:-}" ] && [ -f "$PATCH" ] \
+    if [ -n "${frfw_dir:-}" ] \
             && grep -q 'bytes_out' "$frfw_dir/conntrack.py" 2>/dev/null; then
-        if patch -R -p1 -d "$frfw_dir/.." < "$PATCH" >/dev/null 2>&1; then
+        # Review2 uninstall: --with-upload-bytes was used, so the FR_OS
+        # patch is on disk. With the bundle's patch file it reverts;
+        # without it, say so loudly instead of skipping silently --
+        # uninstall never fails, but the admin must know what stayed.
+        if [ ! -f "$PATCH" ]; then
+            say "WARNING: $PATCH is missing, so FR_OS's frfw/conntrack.py and frfw/helper/server.py keep the conntrack patch (its integrity check still lists them). Restore them by reinstalling FR_OS's frfw package, then: systemctl restart fr-apply-helper fr-webui"
+        elif patch -R -p1 -d "$frfw_dir/.." < "$PATCH" >/dev/null 2>&1; then
             say "reverted the FR_OS conntrack patch"
             # Review F2: the running helper keeps the patched code until
             # it restarts. Warn-only: uninstall never fails.
