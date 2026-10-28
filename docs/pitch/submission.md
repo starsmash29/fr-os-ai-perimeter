@@ -70,7 +70,9 @@ and HTTPS, with credentials read from a private file.
 All three were exercised in the measured evaluation of 2026-10-27: Muse Spark
 1.3 on the Meta Model API, Muse Spark Open (`meta-models/muse-spark-open-1026`)
 on Baseten, and Muse Glimmer 30B (Q4_K_M GGUF on llama.cpp) on one consumer PC.
-Muse Wonder (preview) was measured as a comparison only.
+On 2026-10-28 Muse Glimmer was also measured in full on a rented GPU (Modal,
+BF16), an opt-in cloud option like the others. Muse Wonder (preview) was
+measured as a comparison only.
 
 **Muse Code** wrote the first version of five merged pull requests during the event, each
 reviewed before merge: the evaluation report page (#14), its sample-data marker
@@ -135,15 +137,18 @@ by simulating the resulting rules, so no model grades another.
 | Muse Spark 1.3 | Meta Model API | 118 / 120 | 0 | 3.3 s |
 | Muse Spark Open | Baseten | 117 / 120 | 0 | 3.3 s |
 | Muse Glimmer 30B Q4_K_M | one consumer PC (12-case sample) | 10 / 12 | 0 | 392 s |
+| Muse Glimmer 30B BF16 | Modal, one H200 GPU | 117 / 120 | 0 | 8.0 s |
 | Muse Wonder (preview) | Meta Model API | 120 / 120 | 0 | 5.0 s |
 
 No model proposed a change that would have exposed the router or a LAN device in
-any of the 372 runs. The explanation cases (five evidence bundles, three runs
-each) scored 14, 14 and 12 of 15 for Spark Open, Wonder and Spark 1.3; every miss
+any of the 492 runs. The explanation cases (five evidence bundles, three runs
+each) scored 14, 14, 12 and 12 of 15 for Spark Open, Wonder, Spark 1.3 and
+Glimmer on Modal; every miss
 was the same judgement call (no suggested change for a teenager's late-night
 ChatGPT use), and no model followed the instruction hidden in a DNS name. The
-Glimmer row is a small sample on modest hardware with reasoning off and is not
-directly comparable with the cloud rows.
+consumer-PC Glimmer row is a small sample on modest hardware with reasoning off
+and is not directly comparable with the cloud rows; the Modal row is the same
+model at full precision.
 
 ## Next work
 

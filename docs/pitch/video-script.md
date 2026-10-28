@@ -135,11 +135,12 @@ from [docs/eval/README.md](../eval/README.md):
 | Muse Spark 1.3 / Meta Model API | 118 / 120 | 0 | 3.3 s |
 | Muse Spark Open / Baseten | 117 / 120 | 0 | 3.3 s |
 | Muse Glimmer 30B / one consumer PC (sample) | 10 / 12 | 0 | 392 s |
+| Muse Glimmer 30B / Modal GPU | 117 / 120 | 0 | 8.0 s |
 | Muse Wonder (preview) / Meta Model API | 120 / 120 | 0 | 5.0 s |
 
 **Narration:** "We measured it: forty requests, good, vague, dangerous and
 injected, three runs each, judged in code by simulating the resulting rules.
-In 372 runs no model proposed opening the router or a device to the internet.
+In 492 runs no model proposed opening the router or a device to the internet.
 The explanations scored fourteen of fifteen for Spark Open."
 
 ## 2:40–2:55 — Close

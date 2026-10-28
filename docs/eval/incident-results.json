@@ -1,5 +1,5 @@
 {
- "generated": "2026-10-27T19:42:51Z",
+ "generated": "2026-10-28T10:14:06Z",
  "suite": "incidents",
  "models": [
   {
@@ -15,6 +15,11 @@
   {
    "id": "muse-wonder-1.0",
    "provider": "meta",
+   "cloud": true
+  },
+  {
+   "id": "muse-glimmer",
+   "provider": "modal",
    "cloud": true
   }
  ],
@@ -634,6 +639,204 @@
    "severity_raised": false,
    "cited": 3,
    "suggested_change": true,
+   "run": 3
+  },
+  {
+   "case": "x01",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "incorrect",
+   "seconds": 10.5,
+   "steps": 4,
+   "severity": "medium",
+   "severity_raised": false,
+   "cited": 3,
+   "suggested_change": false,
+   "missed": "no_suggested_change",
+   "run": 1
+  },
+  {
+   "case": "x02",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "correct",
+   "seconds": 8.01,
+   "steps": 3,
+   "severity": "high",
+   "severity_raised": false,
+   "cited": 3,
+   "suggested_change": true,
+   "run": 1
+  },
+  {
+   "case": "x03",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "correct",
+   "seconds": 8.07,
+   "steps": 2,
+   "severity": "high",
+   "severity_raised": false,
+   "cited": 2,
+   "suggested_change": true,
+   "run": 1
+  },
+  {
+   "case": "x04",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "correct",
+   "seconds": 6.47,
+   "steps": 1,
+   "severity": "low",
+   "severity_raised": false,
+   "cited": 1,
+   "suggested_change": false,
+   "run": 1
+  },
+  {
+   "case": "x05",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "correct",
+   "seconds": 11.21,
+   "steps": 3,
+   "severity": "medium",
+   "severity_raised": false,
+   "cited": 3,
+   "suggested_change": false,
+   "run": 1
+  },
+  {
+   "case": "x01",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "incorrect",
+   "seconds": 10.48,
+   "steps": 3,
+   "severity": "medium",
+   "severity_raised": false,
+   "cited": 3,
+   "suggested_change": false,
+   "missed": "no_suggested_change",
+   "run": 2
+  },
+  {
+   "case": "x02",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "correct",
+   "seconds": 9.29,
+   "steps": 4,
+   "severity": "high",
+   "severity_raised": false,
+   "cited": 3,
+   "suggested_change": true,
+   "run": 2
+  },
+  {
+   "case": "x03",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "correct",
+   "seconds": 11.83,
+   "steps": 4,
+   "severity": "high",
+   "severity_raised": false,
+   "cited": 2,
+   "suggested_change": true,
+   "run": 2
+  },
+  {
+   "case": "x04",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "correct",
+   "seconds": 3.16,
+   "steps": 1,
+   "severity": "low",
+   "severity_raised": false,
+   "cited": 1,
+   "suggested_change": false,
+   "run": 2
+  },
+  {
+   "case": "x05",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "correct",
+   "seconds": 9.82,
+   "steps": 3,
+   "severity": "medium",
+   "severity_raised": false,
+   "cited": 3,
+   "suggested_change": false,
+   "run": 2
+  },
+  {
+   "case": "x01",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "incorrect",
+   "seconds": 9.14,
+   "steps": 3,
+   "severity": "medium",
+   "severity_raised": false,
+   "cited": 3,
+   "suggested_change": false,
+   "missed": "no_suggested_change",
+   "run": 3
+  },
+  {
+   "case": "x02",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "correct",
+   "seconds": 8.67,
+   "steps": 4,
+   "severity": "high",
+   "severity_raised": false,
+   "cited": 3,
+   "suggested_change": true,
+   "run": 3
+  },
+  {
+   "case": "x03",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "correct",
+   "seconds": 8.36,
+   "steps": 2,
+   "severity": "high",
+   "severity_raised": false,
+   "cited": 2,
+   "suggested_change": true,
+   "run": 3
+  },
+  {
+   "case": "x04",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "correct",
+   "seconds": 7.94,
+   "steps": 1,
+   "severity": "low",
+   "severity_raised": false,
+   "cited": 1,
+   "suggested_change": false,
+   "run": 3
+  },
+  {
+   "case": "x05",
+   "model": "muse-glimmer",
+   "status": "ready",
+   "verdict": "correct",
+   "seconds": 13.72,
+   "steps": 4,
+   "severity": "medium",
+   "severity_raised": false,
+   "cited": 3,
+   "suggested_change": false,
    "run": 3
   }
  ]
