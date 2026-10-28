@@ -18,7 +18,9 @@
 # - it is off until /etc/fr_os/ai-perimeter.yaml says enabled: true (I1, K7),
 #   and the API key file stays root's, mode 0600.
 # - with --with-upload-bytes only: conntrack accounting
-#   (/etc/sysctl.d/60-ai-perimeter.conf), the two-file FR_OS patch
+#   (/etc/sysctl.d/60-ai-perimeter.conf; the value before is recorded in
+#   /etc/fr_os/ai-perimeter-upload-owned and restored on uninstall,
+#   review F11), the two-file FR_OS patch
 #   (integration/fr_os/conntrack-bytes.patch, so FR_OS's integrity check
 #   lists those two files on a router that opts in, SEC-15), and the
 #   fr-ai-upload collector running as fr_os-sensor. Without the flag none
@@ -36,6 +38,12 @@ WEBUI_USER=fr_os-webui
 SENSOR_USER=fr_os-sensor
 UPLOAD_UNIT=fr-ai-upload.service
 SYSCTL_CONF=/etc/sysctl.d/60-ai-perimeter.conf
+# Review F11: where --with-upload-bytes records the nf_conntrack_acct value
+# it found (root, 0600), so uninstall restores exactly that. Not under
+# /var/lib/fr_os-ai-perimeter: systemd hands that StateDirectory to the
+# collector's fr_os-sensor account, and a value root later feeds to sysctl
+# must not be writable by a sensor account (A1).
+UPLOAD_OWNED=/etc/fr_os/ai-perimeter-upload-owned
 PYTHON=${PYTHON:-python3}
 
 HERE=$(cd -- "$(dirname -- "$0")" && pwd)
@@ -160,12 +168,46 @@ YAML
     say "to use a model, edit $SETTINGS (enabled: true), then: systemctl restart fr-ai-assist"
 }
 
+# Review F2: one conntrack_sample, classified. Prints "bytes" (the flows
+# carry bytes_out), "plain" (flows, but no bytes_out) or "empty" (no flows,
+# or no answer at all). Never fails.
+sample_kind() {
+    "$PYTHON" -c '
+try:
+    from frfw.helper.client import conntrack_sample
+    flows = conntrack_sample().get("flows")
+except Exception:
+    print("empty")
+else:
+    if not isinstance(flows, list) or not flows:
+        print("empty")
+    elif any(isinstance(f, dict) and "bytes_out" in f for f in flows):
+        print("bytes")
+    else:
+        print("plain")
+' 2>/dev/null || echo "empty"
+}
+
 install_upload_bytes() {
     command -v patch >/dev/null 2>&1 || die "patch(1) is needed for --with-upload-bytes"
     frfw_dir=$("$PYTHON" -c 'import frfw, os; print(os.path.dirname(frfw.__file__))' 2>/dev/null) \
         || die "frfw is not installed for $PYTHON"
 
     say "enabling conntrack accounting"
+    # Review F11: record what accounting was before changing it, so
+    # uninstall restores exactly that. Written once: a re-install finds
+    # accounting already ours and must not overwrite the original value.
+    if [ ! -e "$UPLOAD_OWNED" ]; then
+        prior=$(sysctl -n net.netfilter.nf_conntrack_acct 2>/dev/null || true)
+        if [ -n "$prior" ]; then
+            install -d -m 0755 "$(dirname "$UPLOAD_OWNED")"
+            printf '%s\n' "$prior" > "$UPLOAD_OWNED"
+            chown root:root "$UPLOAD_OWNED"
+            chmod 0600 "$UPLOAD_OWNED"
+        else
+            say "WARNING: could not read nf_conntrack_acct; uninstall will leave it as is"
+        fi
+    fi
     printf '%s\n' "# FR_OS AI-Perimeter (opt-in --with-upload-bytes): count bytes per flow" \
         "net.netfilter.nf_conntrack_acct = 1" > "$SYSCTL_CONF"
     chmod 0644 "$SYSCTL_CONF"
@@ -182,6 +224,17 @@ install_upload_bytes() {
             || die "the patched FR_OS does not import"
     fi
 
+    # Review F2: the running helper keeps whatever code it started with,
+    # so a patch on disk alone changes nothing until it restarts; then one
+    # sample must show the new counters. A quiet router with no flows to
+    # check against can only warn, never fail.
+    systemctl try-restart fr-apply-helper.service
+    case $(sample_kind) in
+        bytes) say "the helper reports per-flow byte counters" ;;
+        empty) say "WARNING: no conntrack flows to check bytes_out against; the collector counts once flows appear" ;;
+        plain) die "the helper answers but reports no bytes_out even after restarting it" ;;
+    esac
+
     say "installing $UPLOAD_UNIT"
     install -m 0644 "$HERE/systemd/$UPLOAD_UNIT" "$UNITS_DIR/$UPLOAD_UNIT"
     systemctl daemon-reload
@@ -194,13 +247,34 @@ install_upload_bytes() {
 remove_upload_bytes() {
     systemctl disable --now "$UPLOAD_UNIT" 2>/dev/null || true
     rm -f "$UNITS_DIR/$UPLOAD_UNIT" "$SYSCTL_CONF"
-    # Back to the kernel default; best effort (a container may refuse).
-    sysctl -w net.netfilter.nf_conntrack_acct=0 >/dev/null 2>&1 || true
+    # Review F11: accounting goes back to exactly what --with-upload-bytes
+    # found, and only when it recorded owning it. A plain install never
+    # wrote the marker, so a plain uninstall never touches the sysctl.
+    if [ -e "$UPLOAD_OWNED" ]; then
+        prior=$(cat "$UPLOAD_OWNED" 2>/dev/null || true)
+        rm -f "$UPLOAD_OWNED"
+        case "$prior" in
+            0|1) ;;
+            *)
+                say "WARNING: $UPLOAD_OWNED held '$prior'; leaving nf_conntrack_acct as is"
+                prior= ;;
+        esac
+        if [ -n "$prior" ]; then
+            sysctl -w "net.netfilter.nf_conntrack_acct=$prior" >/dev/null 2>&1 \
+                || say "WARNING: could not restore nf_conntrack_acct to $prior"
+        fi
+    fi
     frfw_dir=$("$PYTHON" -c 'import frfw, os; print(os.path.dirname(frfw.__file__))' 2>/dev/null) || true
     if [ -n "${frfw_dir:-}" ] && [ -f "$PATCH" ] \
             && grep -q 'bytes_out' "$frfw_dir/conntrack.py" 2>/dev/null; then
         if patch -R -p1 -d "$frfw_dir/.." < "$PATCH" >/dev/null 2>&1; then
             say "reverted the FR_OS conntrack patch"
+            # Review F2: the running helper keeps the patched code until
+            # it restarts. Warn-only: uninstall never fails.
+            systemctl try-restart fr-apply-helper.service 2>/dev/null || true
+            if [ "$(sample_kind)" = bytes ]; then
+                say "WARNING: the helper still reports bytes_out after the revert"
+            fi
         else
             say "WARNING: the FR_OS conntrack patch would not revert; its integrity check still lists it"
         fi

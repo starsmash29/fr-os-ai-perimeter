@@ -146,7 +146,10 @@ UPLOAD = "fr-ai-upload.service"
 UPLOAD_SANDBOX = {
     **{k: v for k, v in SANDBOX.items() if k != "DynamicUser"},
     "User": "fr_os-sensor",
+    # Review F1: the totals are group-readable under FR_OS's shared group.
+    "Group": "fr_os-feeds",
     "StateDirectory": "fr_os-ai-perimeter",
+    "StateDirectoryMode": "0750",
     "IPAddressDeny": "any",
     "UMask": "0027",
 }
@@ -159,6 +162,16 @@ def test_the_upload_collector_is_sandboxed(key, value):
 
 def test_the_upload_collector_has_no_dynamic_account():
     assert "DynamicUser" not in section(UPLOAD, "[Service]")
+
+
+def test_the_upload_collector_shares_through_the_feeds_group():
+    """Review F1: the webUI reads the totals through FR_OS's shared group
+    (fr_os-feeds) -- never by putting the sensor account in the webUI's
+    group (FR_OS SEC-11)."""
+    s = section(UPLOAD, "[Service]")
+    assert one(s, "Group") == "fr_os-feeds"
+    assert one(s, "User") == "fr_os-sensor"
+    assert "SupplementaryGroups" not in s
 
 
 def test_the_upload_collector_reaches_only_the_helper_socket():
