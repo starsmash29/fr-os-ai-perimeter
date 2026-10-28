@@ -120,6 +120,13 @@ on llama.cpp b11933 (CUDA), with `-ngl 20 --reasoning-budget 0 -np 1` on an 8 GB
 32 GB RAM. That works, but at about 3 tokens a second a request takes minutes; a GPU that
 holds the whole model is what makes it interactive.
 
+### Muse Glimmer on a cloud GPU (Modal)
+
+The same open-weight model, on one rented L40S instead of your own PC, behind an
+API key: [`deploy/modal/`](deploy/modal/README.md) has the app, its pinned inputs and the
+steps. It is a cloud provider like the two below (`allow_cloud: true`, HTTPS, a key
+file), so it is opt-in, and it scales to zero when idle.
+
 ### Baseten / Muse Spark Open
 
 ```yaml
