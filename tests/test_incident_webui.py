@@ -13,13 +13,14 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from ai_perimeter.incident.evidence import Sources
 
 from test_client import _completion
 from test_incident import NOW, INJECTION, TABLET_IP, TABLET_MAC, answer, sources, tool  # noqa: F401
 from test_orchestrator import KIDS_NIGHT
-from test_webui import env, login, post, proposal_id, provider  # noqa: F401 (fixtures)
+from test_webui import REAL_HASH, env, login, post, proposal_id, provider  # noqa: F401 (fixtures)
 
 
 @pytest.fixture
@@ -187,6 +188,61 @@ def test_the_office_scenario_end_to_end(env, tmp_path):  # noqa: F811
     assert "Azarus Group loader" in sent  # the feed's label is evidence
     for secret in (LAPTOP_IP, LAPTOP_MAC, "design-laptop"):
         assert secret not in sent
+
+
+OFFICE_CONFIG = Path(__file__).resolve().parents[1] / "demo" / "shadow_ai" / "office.yaml"
+HOME_CONFIG = Path(__file__).resolve().parents[1] / "src" / "ai_perimeter" / "eval" / "home.yaml"
+CUT_LAPTOP = {
+    "summary": "Cuts the design laptop off the internet.",
+    "operations": [{
+        "op": "add_rule", "position": "start",
+        "rule": {"name": "design-laptop-cut", "action": "drop", "from_zone": "lan",
+                 "to_zone": "wan", "src_mac": LAPTOP_MAC},
+    }],
+}
+
+
+def test_the_office_config_is_home_plus_the_office_reservations():
+    """The office demo config differs from home.yaml -- the file the
+    evaluation's results were measured on -- by the two office devices'
+    reservations only, so the numbers still describe the home config."""
+    home, office = (yaml.safe_load(f.read_text()) for f in (HOME_CONFIG, OFFICE_CONFIG))
+    extra = office["dhcp"]["lan"]["reservations"][len(home["dhcp"]["lan"]["reservations"]):]
+    assert extra == [{"mac": LAPTOP_MAC, "address": LAPTOP_IP, "hostname": "design-laptop"},
+                     {"mac": "02:00:00:00:10:05", "address": "192.168.10.41",
+                      "hostname": "reception-pc"}]
+    office["dhcp"]["lan"]["reservations"] = office["dhcp"]["lan"]["reservations"][:-2]
+    assert office == home
+
+
+def test_the_office_laptop_is_cut_off_end_to_end(env, tmp_path):  # noqa: F811
+    """The office scene's last step, on the office demo config: Explain the
+    laptop, propose the box's own text, save. The propose model is told
+    the laptop by name (the config has its reservation), and the saved
+    config holds the drop rule for its MAC."""
+    config = yaml.safe_load(OFFICE_CONFIG.read_text())
+    config["ztna"]["users"][0]["password_hash"] = REAL_HASH
+    env["config_path"].write_text(yaml.safe_dump(config, sort_keys=False))
+    client = _office(env, tmp_path)
+    env["provider"].queue = [
+        tool("tls_fingerprints"),
+        answer(title="Laptop ran a loader the threat feed knows", severity="high",
+               summary="device-1 connected with a blocklisted TLS client.",
+               evidence=["tls-1"], suggested_intent="Cut device-1 off the internet")]
+    text = html.unescape(post(client, "/ai-perimeter/explain", {"ip": LAPTOP_IP}).text)
+    box = text.split("<textarea")[1].split("</textarea>")[0].split(">", 1)[1]
+    assert box == f"Cut design-laptop ({LAPTOP_IP}) off the internet"
+
+    env["provider"].requests.clear()
+    env["provider"].body = _completion(json.dumps(CUT_LAPTOP))
+    page = post(client, "/ai-perimeter/propose", {"intent": box})
+    asked = json.dumps([r["json"] for r in env["provider"].requests])
+    assert "design-laptop" in asked and LAPTOP_MAC in asked  # the reservation
+    assert "design-laptop-cut" in page.text and proposal_id(page.text)
+    saved = post(client, "/ai-perimeter/save", {"proposal_id": proposal_id(page.text)})
+    assert saved.status_code == 303 and "success=" in saved.headers["location"]
+    rule = yaml.safe_load(env["config_path"].read_text())["rules"][0]
+    assert (rule["name"], rule["action"], rule["src_mac"]) == ("design-laptop-cut", "drop", LAPTOP_MAC)
 
 
 def test_the_office_file_server_reads_as_dga_and_scan(env, tmp_path):  # noqa: F811

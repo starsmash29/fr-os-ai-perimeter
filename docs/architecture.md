@@ -194,4 +194,5 @@ and the resolver's query log through the `fr_os-feeds` group), and the model
 answers in a bounded read-only loop over that bundle. See the README's
 "What did the router see?".
 
-Use only [`tests/data/home.yaml`](../tests/data/home.yaml) for demonstrations.
+Use only [`tests/data/home.yaml`](../tests/data/home.yaml) for demonstrations (the office scene:
+[`demo/shadow_ai/office.yaml`](../demo/shadow_ai/office.yaml), the same plus two reservations).

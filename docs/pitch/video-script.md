@@ -9,7 +9,9 @@ spoken. Keep all eight scenes within their slots, including transitions.
 ## Recording basis
 
 Use only [tests/data/home.yaml](../../tests/data/home.yaml) for the demo router
-configuration, and the [demo sensor files](../../demo/shadow_ai/README.md)
+configuration (for the office scene,
+[demo/shadow_ai/office.yaml](../../demo/shadow_ai/office.yaml): the same file plus
+the office laptop's and reception PC's reservations), and the [demo sensor files](../../demo/shadow_ai/README.md)
 (`--scenario home` and `--scenario office`) for what the router saw. Do not show a real router configuration, credentials or account
 screens. Use repository assets and local captures; no externally loaded assets.
 
