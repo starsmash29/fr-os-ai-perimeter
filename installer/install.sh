@@ -44,13 +44,25 @@ SYSCTL_CONF=/etc/sysctl.d/60-ai-perimeter.conf
 # collector's fr_os-sensor account, and a value root later feeds to sysctl
 # must not be writable by a sensor account (F5).
 UPLOAD_OWNED=/etc/fr_os/ai-perimeter-upload-owned
+# The collector's StateDirectory: upload.json holds LAN addresses, MACs and
+# byte totals, so uninstall removes it (audit F-R2-05).
+UPLOAD_STATE_DIR=/var/lib/fr_os-ai-perimeter
 PYTHON=${PYTHON:-python3}
 
 HERE=$(cd -- "$(dirname -- "$0")" && pwd)
 PATCH=$HERE/patches/conntrack-bytes.patch
 
 say() { printf 'ai-perimeter: %s\n' "$*"; }
-die() { printf 'ai-perimeter: error: %s\n' "$*" >&2; exit 1; }
+# Set while --with-upload-bytes is changing FR_OS, so a failure says how to
+# get back to a clean state instead of stopping half-way silently (F-R2-04).
+UPLOAD_HINT=
+die() {
+    printf 'ai-perimeter: error: %s\n' "$*" >&2
+    if [ -n "$UPLOAD_HINT" ]; then
+        printf 'ai-perimeter: %s\n' "$UPLOAD_HINT" >&2
+    fi
+    exit 1
+}
 
 usage() {
     sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
@@ -211,12 +223,29 @@ install_upload_bytes() {
     printf '%s\n' "# FR_OS AI-Perimeter (opt-in --with-upload-bytes): count bytes per flow" \
         "net.netfilter.nf_conntrack_acct = 1" > "$SYSCTL_CONF"
     chmod 0644 "$SYSCTL_CONF"
+    UPLOAD_HINT="the install stopped half-way: run 'sudo $0 --uninstall' to undo it, then re-run with --with-upload-bytes"
     sysctl -w net.netfilter.nf_conntrack_acct=1 >/dev/null \
         || die "could not enable nf_conntrack_acct (sysctl)"
 
-    if grep -q 'bytes_out' "$frfw_dir/conntrack.py" 2>/dev/null; then
+    # Audit A-01: the patch touches two files, so both must carry it to
+    # count as applied; one patched and one not is a broken FR_OS, never
+    # "already applied".
+    patched=0
+    for f in conntrack.py helper/server.py; do
+        if grep -q 'bytes_out' "$frfw_dir/$f" 2>/dev/null; then
+            patched=$((patched + 1))
+        fi
+    done
+    if [ "$patched" -eq 2 ]; then
         say "the FR_OS conntrack patch is already applied"
+    elif [ "$patched" -eq 1 ]; then
+        die "FR_OS is half-patched (only one of frfw/conntrack.py, frfw/helper/server.py has bytes_out): reinstall FR_OS's frfw package first"
     else
+        # A dry run first: patch(1) applies the hunks that fit and leaves
+        # .rej files for the rest, so a tree that is not the pinned FR_OS
+        # must be refused before anything on disk changes.
+        out=$(patch --dry-run -p1 -d "$frfw_dir/.." < "$PATCH" 2>&1) \
+            || die "the conntrack patch does not fit this FR_OS (not the pinned version?); nothing was changed in FR_OS: $out"
         say "applying the conntrack patch to FR_OS (its integrity check will list 2 files)"
         out=$(patch -p1 -d "$frfw_dir/.." < "$PATCH" 2>&1) \
             || die "could not apply the conntrack patch: $out"
@@ -241,12 +270,14 @@ install_upload_bytes() {
     systemctl enable --now "$UPLOAD_UNIT"
     systemctl is-active --quiet "$UPLOAD_UNIT" \
         || die "$UPLOAD_UNIT did not start (journalctl -u $UPLOAD_UNIT)"
+    UPLOAD_HINT=
     say "counting per-device upload bytes (upload.json every 15 s)"
 }
 
 remove_upload_bytes() {
     systemctl disable --now "$UPLOAD_UNIT" 2>/dev/null || true
     rm -f "$UNITS_DIR/$UPLOAD_UNIT" "$SYSCTL_CONF"
+    rm -rf -- "$UPLOAD_STATE_DIR"
     # Review F11: accounting goes back to exactly what --with-upload-bytes
     # found, and only when it recorded owning it. A plain install never
     # wrote the marker, so a plain uninstall never touches the sysctl.

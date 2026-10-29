@@ -708,3 +708,36 @@ def test_strip_bidi_controls_removes_the_listed_ranges():
             "\u200ek\u200fl")
     assert evidence.strip_bidi_controls(text) == "abcdefghijkl"
     assert evidence.strip_bidi_controls("plain - text 123") == "plain - text 123"
+
+
+def test_a_corrupt_ids_entry_is_skipped_not_an_error(sources):
+    """Audit F-R2-01: a non-dict entry in the IDS state (a crashed writer,
+    disk corruption) is skipped like a bad TLS entry, instead of raising
+    AttributeError through the screen's routes."""
+    clean, _ = build_bundle(TABLET_IP, sources, now=NOW)
+    events = json.loads(sources.ids.read_text())
+    sources.ids.write_text(json.dumps([42, "x", None] + events))
+    assert [r["ip"] for r in suspects(sources, now=NOW)] == [TABLET_IP]
+    bundle, _ = build_bundle(TABLET_IP, sources, now=NOW)
+    assert bundle["sections"]["ids_events"] == clean["sections"]["ids_events"] != []
+
+
+@pytest.mark.parametrize("count", ["3", None, [], {"n": 1}, True])
+def test_a_non_numeric_threat_count_does_not_raise(count):
+    """Audit F-R2-06: severity_floor reads a count the sensor wrote; a value
+    that is not a number counts as none rather than a TypeError."""
+    bundle = {"sections": {"tls_fingerprints": [],
+                           "ids_events": [{"dns_threat_count": count}]}}
+    assert explain.severity_floor(bundle) == "medium"
+
+
+@pytest.mark.parametrize("cut", ["on_newline", "mid_line"])
+def test_tail_keeps_a_line_that_starts_on_the_boundary(tmp_path, cut):
+    """Audit F-C8: the first line in the window is dropped only when the
+    window starts inside it, never when it starts right after a newline."""
+    path = tmp_path / "log"
+    path.write_bytes(b"first line\nsecond\nthird\n")
+    limit = len(b"second\nthird\n") + (0 if cut == "on_newline" else 2)
+    lines = evidence._tail(path, limit)
+    assert lines == ["second", "third"]
+    assert evidence._tail(path, 10_000) == ["first line", "second", "third"]

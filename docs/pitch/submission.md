@@ -159,7 +159,7 @@ model at full precision.
 
 - **Shadow AI by volume:** done -- per-device upload bytes, counted opt-in by the
   `fr-ai-upload` collector, attributed to AI services per device, flagging
-  over 50 MB in 24 hours.
+  over 50 MiB in 24 hours.
 - **Compliance reporting:** the explanation carries control references only; a
   full NIS2 / NIST mapping and audit export is outside this project.
 

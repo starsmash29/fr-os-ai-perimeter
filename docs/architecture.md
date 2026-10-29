@@ -176,7 +176,8 @@ are not savable. Service/transport failures are errors, not proposals.
 
 ### How it joins FR_OS
 
-No FR_OS file is changed, so FR_OS's own integrity check (which compares the
+No FR_OS file is changed in the default install (`--with-upload-bytes` applies
+a marked, reversible patch to two files), so FR_OS's own integrity check (which compares the
 installed files with the signed release) stays clean. `fr-webui-ai` runs
 FR_OS's unchanged webUI code and adds the screen and its sidebar entry in
 memory; a systemd drop-in for `fr-webui.service` starts it in place of
