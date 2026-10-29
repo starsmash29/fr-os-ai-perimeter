@@ -287,7 +287,9 @@ def collect(sources: Sources = Sources(), *, now: float | None = None) -> dict[s
         if ip in clients:
             s = clients[ip]
             s.mac = s.mac or str(device.get("mac") or "")
-            s.name = str(device.get("hostname") or device.get("name") or "")
+            # Review2 C19 also covers the name the admin reads, not only
+            # the model's copy (Muse review).
+            s.name = strip_bidi_controls(str(device.get("hostname") or device.get("name") or ""))
             s.category = str(device.get("category") or "")
     return {ip: s for ip, s in clients.items() if s.reasons()}
 
@@ -533,12 +535,14 @@ def _read_sni(path: Path, client, now: float) -> None:
             continue
         ts = _number(event.get("ts"), now)
         name = event.get("sni")
-        if ts is None or ts < since or not isinstance(name, str) or not name:
+        if ts is None or ts < since or not isinstance(name, str):
             continue
+        # Muse review: normalised first, so "." is no name rather than "".
+        name = name.lower().rstrip(".")
         s = client(event.get("saddr"))
-        if s is None:
+        if s is None or not name:
             continue
-        row = s.sni.setdefault(name.lower().rstrip("."), [0, ts, ts])
+        row = s.sni.setdefault(name, [0, ts, ts])
         row[0] += 1
         row[1], row[2] = min(row[1], ts), max(row[2], ts)
 
@@ -578,7 +582,7 @@ def build_bundle(ip: str, sources: Sources = Sources(), *, now: float | None = N
     for e in sorted(s.ids, key=lambda e: e["ts"])[-MAX_ITEMS:]:
         sections["ids_events"].append({
             "when": _when(e["ts"]), "score": _number(e.get("score"), now),
-            "reasons": [text(r) for r in e.get("reasons", [])[:6] if isinstance(r, str)],
+            "reasons": [text(r) for r in _list(e.get("reasons"))[:6] if isinstance(r, str)],
             **{k: _number(e.get(k), now) for k in ("conn_rate", "unique_dst_ratio", "sni_block_count",
                                                   "nxdomain_count", "dga_nxdomain_count",
                                                   "dns_threat_count")}})
@@ -624,7 +628,7 @@ def build_bundle(ip: str, sources: Sources = Sources(), *, now: float | None = N
 def _name(s: Signals, labels: dict[str, str] | None) -> str:
     if s.name or not labels:
         return s.name
-    return labels.get(s.ip) or labels.get(s.mac.lower()) or ""
+    return strip_bidi_controls(labels.get(s.ip) or labels.get(s.mac.lower()) or "")
 
 
 def evidence_ids(bundle: dict[str, Any]) -> set[str]:
@@ -635,9 +639,10 @@ def evidence_ids(bundle: dict[str, Any]) -> set[str]:
 
 #: A MAC address (either separator), not glued to more hex.
 _MAC_RE = re.compile(r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f])")
-#: An IPv4 quad with word boundaries (dots allowed either side, for
-#: addresses glued into DNS names); validated with ipaddress below.
-_V4_RE = re.compile(r"(?<![\w])([0-9]{1,3}(?:\.[0-9]{1,3}){3})(?![\w])")
+#: An IPv4 quad bounded by digits only, so one glued into a DNS name or to
+#: letters (``a192.168.1.10b``, Muse review) is still caught; validated with
+#: ipaddress below. Scrubbing too much is the safe side.
+_V4_RE = re.compile(r"(?<![0-9])([0-9]{1,3}(?:\.[0-9]{1,3}){3})(?![0-9])")
 #: A maximal run of what an IP address is written with (review F4).
 _TOKEN_RE = re.compile(r"[0-9A-Fa-f:.]+")
 _UNPRINTABLE_RE = re.compile(r"[^\x20-\x7e]")
@@ -691,6 +696,12 @@ def _scrub_token(match: re.Match[str]) -> str:
     if stripped and _valid_ip(stripped):
         return token.replace(stripped, "[address]", 1)
     return token
+
+
+def _list(value: Any) -> list[Any]:
+    """A list from a sensor file, or none: a corrupt ``reasons`` (a number,
+    null, an object) must not raise (Muse review)."""
+    return value if isinstance(value, list) else []
 
 
 def _valid_ip(token: str) -> bool:

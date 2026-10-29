@@ -93,7 +93,8 @@ def propose(intent: Any, raw: Any, ask: Callable[[list[dict[str, str]]], tuple[s
     intent = clean_intent(intent)
     before_raw, before = current_config(raw)
     answer, reasoning = ask(build_messages(intent, before, before_raw))
-    reasoning = (reasoning or "").strip()
+    # Muse review: the reasoning is the model's too; anything but text is none.
+    reasoning = reasoning.strip() if isinstance(reasoning, str) else ""
     if len(reasoning) > MAX_REASONING:
         reasoning = reasoning[:MAX_REASONING] + " [...]"
     try:

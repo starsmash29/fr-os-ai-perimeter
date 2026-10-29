@@ -741,3 +741,44 @@ def test_tail_keeps_a_line_that_starts_on_the_boundary(tmp_path, cut):
     lines = evidence._tail(path, limit)
     assert lines == ["second", "third"]
     assert evidence._tail(path, 10_000) == ["first line", "second", "third"]
+
+
+@pytest.mark.parametrize("reasons", [123, None, {"x": 1}])
+def test_corrupt_ids_reasons_do_not_raise(sources, reasons):
+    """Muse review: a corrupt ``reasons`` value in an IDS entry yields no
+    reasons instead of a TypeError on the whole screen."""
+    events = json.loads(sources.ids.read_text())
+    for event in events:
+        event["reasons"] = reasons
+    sources.ids.write_text(json.dumps(events))
+    bundle, _ = build_bundle(TABLET_IP, sources, now=NOW)
+    assert all(e["reasons"] == [] for e in bundle["sections"]["ids_events"])
+
+
+@pytest.mark.parametrize("glued", ["a192.168.10.99b", "abc10.0.0.5def", "x192.168.10.21"])
+def test_an_address_glued_to_letters_is_still_scrubbed(glued):
+    """Muse review: an IPv4 quad glued to letters reaches neither the model
+    nor the bundle."""
+    assert "[address]" in evidence._scrub(glued, set()) or "device-1" in evidence._scrub(
+        glued, {TABLET_IP})
+    assert not any(ch.isdigit() for ch in evidence._scrub(glued, set()).replace("[address]", ""))
+
+
+def test_the_admins_name_has_no_bidi_controls(sources, tmp_path):
+    """Muse review / review2 C19: the name the admin reads is stripped of
+    bidi controls too, not only the model's copy."""
+    rows = suspects(sources, now=NOW, labels={TABLET_IP: "pay‮pary"})
+    _, names = build_bundle(TABLET_IP, sources, now=NOW, labels={TABLET_IP: "pay‮pary"})
+    for value in [r["name"] for r in rows] + list(names.values()):
+        assert "‮" not in value
+
+
+def test_a_dot_server_name_is_no_sni_drop(sources, tmp_path):
+    """Muse review: an SNI of "." normalises to nothing and is skipped,
+    not counted as a kernel drop with an empty name."""
+    path = tmp_path / "sni-dot.jsonl"
+    path.write_text(json.dumps({"action": "drop", "ts": NOW - 100, "sni": ".",
+                                "saddr": TABLET_IP}) + "\n")
+    bundle, _ = build_bundle(TABLET_IP, dataclasses.replace(sources, sni=path), now=NOW)
+    assert all(b["server_name"] for b in bundle["sections"]["sni_blocks"])
+    assert bundle["sections"]["sni_blocks"] == []
