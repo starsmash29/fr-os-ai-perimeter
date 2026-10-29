@@ -97,11 +97,16 @@ The demo video uses the full-precision checkpoint instead:
 `f84ecc3a0ea984a4c04542a84269e3d065350a6e`, BF16, served by a Modal
 Dedicated Endpoint on one H200 GPU ([deploy/modal/](deploy/modal/README.md)).
 
-TODO(claude): verify that Baseten's `meta-models/muse-spark-open-1026`
-deployment maps to the documented Muse Spark Open release, and record the
-applicable Baseten/hackathon service terms. The source establishes the preset
-string; it does not establish the hosting agreement.
+The Baseten model ID `meta-models/muse-spark-open-1026` is the one the
+hackathon organizers published for Muse Spark Open on Baseten; the measured
+runs of 2026-10-27 used it (docs/eval/README.md). Hosting on Baseten is
+governed by the operator's own Baseten account and
+[Baseten's terms](https://www.baseten.co/terms-and-conditions/), on top of the
+Muse Model License above.
 
-TODO(claude): verify the final Meta API account/model access and any
-hackathon-specific terms before submission. No model weights or provider
+Meta Model API access for `muse-spark-1.3` and `muse-wonder-1.0` was
+exercised by the measured runs of 2026-10-27 (docs/eval/README.md). The
+hackathon's own rules add one term that matters here: the organizers receive
+a perpetual, royalty-free licence to the submission, which is why only
+AGPLv3 Community material is in this repository. No model weights or provider
 credentials are included in this repository.

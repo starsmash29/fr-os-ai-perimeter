@@ -155,7 +155,8 @@ def test_uninstall_restarts_the_helper_after_reverting_the_patch():
     assert revert_at < restart_at < check_at
 
 
-def _upload_fakes(tmp_path, *, conntrack_has_bytes_out, acct_value, probe="empty"):
+def _upload_fakes(tmp_path, *, conntrack_has_bytes_out, acct_value, probe="empty",
+                  server_has_bytes_out=None):
     """A fake router corner for install_upload_bytes/remove_upload_bytes:
     the bundle layout, a fake frfw tree, and fake sysctl/systemctl/patch/
     chown/python on PATH. install.sh is sourced with --help (which only
@@ -184,6 +185,7 @@ def _upload_fakes(tmp_path, *, conntrack_has_bytes_out, acct_value, probe="empty
     (fakebin / "patch").write_text(
         "#!/bin/sh\n"
         'echo "$*" >> "$FAKE_PATCH_CALLS"\n'
+        'case "$*" in *--dry-run*) [ -z "${FAKE_PATCH_MISFITS:-}" ] || exit 1 ;; esac\n'
         "exit 0\n")
     (fakebin / "chown").write_text("#!/bin/sh\nexit 0\n")
     for script in fakebin.iterdir():
@@ -192,6 +194,14 @@ def _upload_fakes(tmp_path, *, conntrack_has_bytes_out, acct_value, probe="empty
     frfw.mkdir(parents=True)
     (frfw / "conntrack.py").write_text(
         "# fake frfw\nbytes_out = 0\n" if conntrack_has_bytes_out else "# fake frfw\n")
+    # The patch touches both files; by default they agree (audit A-01).
+    if server_has_bytes_out is None:
+        server_has_bytes_out = conntrack_has_bytes_out
+    (frfw / "helper").mkdir()
+    (frfw / "helper" / "server.py").write_text(
+        "# fake frfw\nbytes_out = 0\n" if server_has_bytes_out else "# fake frfw\n")
+    (root / "upload-state").mkdir()
+    (root / "upload-state" / "upload.json").write_text("{}")
     bundle = root / "bundle"
     (bundle / "systemd").mkdir(parents=True)
     shutil.copyfile(ROOT / "systemd" / "fr-ai-upload.service",
@@ -226,6 +236,7 @@ def _run_upload_fn(root, env, function):
         'UNITS_DIR="$ROOT_FAKE/units"\n'
         'SYSCTL_CONF="$ROOT_FAKE/sysctl.conf"\n'
         'UPLOAD_OWNED="$ROOT_FAKE/owned"\n'
+        'UPLOAD_STATE_DIR="$ROOT_FAKE/upload-state"\n'
         'PYTHON="$ROOT_FAKE/bin/fake-python"\n'
         f"{function}\n")
     return subprocess.run(["sh", str(driver)], capture_output=True, text=True, env=env)
@@ -309,3 +320,39 @@ def test_uninstall_without_the_patch_file_warns_loudly(tmp_path):
     assert "frfw/helper/server.py" in result.stdout
     assert "reinstall" in result.stdout
     assert (root / "patch-calls").read_text() == "", "no patch file, no revert attempted"
+
+
+def test_a_half_patched_fr_os_is_refused_not_called_applied(tmp_path):
+    """Audit A-01: one of the two patched files carrying bytes_out is a
+    broken FR_OS, not "already applied"; nothing is patched on top of it."""
+    root, env = _upload_fakes(tmp_path, conntrack_has_bytes_out=True, acct_value="0",
+                              server_has_bytes_out=False, probe="bytes")
+    result = _run_upload_fn(root, env, "install_upload_bytes")
+    assert result.returncode != 0
+    assert "half-patched" in result.stderr
+    assert "already applied" not in result.stdout
+    assert (root / "patch-calls").read_text() == ""
+    assert "--uninstall" in result.stderr, "a failure says how to undo it (F-R2-04)"
+
+
+def test_a_patch_that_does_not_fit_changes_nothing_in_fr_os(tmp_path):
+    """Audit A-01: a dry run comes first, so a tree that is not the pinned
+    FR_OS is refused before patch(1) can leave half the hunks applied."""
+    root, env = _upload_fakes(tmp_path, conntrack_has_bytes_out=False, acct_value="0",
+                              probe="bytes")
+    env["FAKE_PATCH_MISFITS"] = "1"
+    result = _run_upload_fn(root, env, "install_upload_bytes")
+    assert result.returncode != 0
+    assert "nothing was changed in FR_OS" in result.stderr
+    calls = (root / "patch-calls").read_text().splitlines()
+    assert len(calls) == 1 and "--dry-run" in calls[0], "the real apply never ran"
+    assert "--uninstall" in result.stderr, "a failure says how to undo it (F-R2-04)"
+
+
+def test_uninstall_removes_the_collectors_state(tmp_path):
+    """Audit F-R2-05: upload.json holds LAN addresses, MACs and byte totals;
+    uninstall removes it, so a reinstall does not read it back."""
+    root, env = _upload_fakes(tmp_path, conntrack_has_bytes_out=False, acct_value="1")
+    result = _run_upload_fn(root, env, "remove_upload_bytes")
+    assert result.returncode == 0, result.stderr
+    assert not (root / "upload-state").exists()

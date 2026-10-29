@@ -234,6 +234,8 @@ def collect(sources: Sources = Sources(), *, now: float | None = None) -> dict[s
         return None
 
     for event in load_recent_events(sources.ids):
+        if not isinstance(event, dict):
+            continue  # a corrupt entry must not take the whole screen down
         ts = _number(event.get("ts"), now)
         s = client(event.get("ip"))
         if s is None or ts is None or ts < since:
@@ -499,11 +501,19 @@ def _tail(path: Path, limit: int) -> list[str]:
         with path.open("rb") as fh:
             fh.seek(0, 2)
             size = fh.tell()
-            fh.seek(max(0, size - limit))
-            text = fh.read().decode("utf-8", "replace")
+            start = max(0, size - limit)
+            # Peek one byte before the window: the first line is whole only
+            # if the window starts right after a newline.
+            fh.seek(max(0, start - 1))
+            data = fh.read()
     except OSError:
         return []
-    return text.splitlines()[1 if size > limit else 0:]
+    if start > 0:
+        whole = data[:1] == b"\n"
+        data = data[1:]
+        lines = data.decode("utf-8", "replace").splitlines()
+        return lines if whole else lines[1:]
+    return data.decode("utf-8", "replace").splitlines()
 
 
 def _read_sni(path: Path, client, now: float) -> None:

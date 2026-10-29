@@ -298,7 +298,7 @@ def test_a_pair_active_for_30h_reports_only_the_last_24h(tmp_path):
     server.server_close()
 
 
-def test_the_output_is_atomic_mode_0640_and_shaped(tmp_path):
+def test_the_output_leaves_no_temp_file_mode_0640_and_shaped(tmp_path):
     now = [8000.0]
     script = [{"ok": True, "flows": [flow(out=10, inn=0)]},
               {"ok": True, "flows": [flow(out=25, inn=7)]}]

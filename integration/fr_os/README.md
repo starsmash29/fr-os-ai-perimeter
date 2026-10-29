@@ -1,6 +1,7 @@
 # Joining FR_OS without changing it
 
-FR_OS is a dependency of this project, not part of it, and **no FR_OS file is changed**. FR_OS
+FR_OS is a dependency of this project, not part of it, and **no FR_OS file is changed in the
+default install**; `--with-upload-bytes` applies the marked, reversible patch in this directory. FR_OS
 compares its installed files with the signed release they came from (FR_OS `frfw.integrity`,
 SEC-15) and shows any difference on its dashboard, because that is the mark a patched-in implant
 leaves. A router running the AI-Perimeter must not look like that.

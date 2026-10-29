@@ -152,10 +152,18 @@ def overview(bundle: dict[str, Any]) -> dict[str, Any]:
             "sections": {name: [item["id"] for item in sections[name]] for name in SECTIONS}}
 
 
+def _count(value: Any) -> float:
+    """A count from the bundle; anything that is not a number is 0, so a
+    malformed sensor value cannot turn the explanation into an error."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return value
+
+
 def severity_floor(bundle: dict[str, Any]) -> str:
     s = bundle["sections"]
     if any(t.get("kind") == "on the fingerprint blocklist" for t in s["tls_fingerprints"]) \
-            or any((e.get("dns_threat_count") or 0) > 0 for e in s["ids_events"]):
+            or any(_count(e.get("dns_threat_count")) > 0 for e in s["ids_events"]):
         return "high"
     if s["ids_events"]:
         return "medium"

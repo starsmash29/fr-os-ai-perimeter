@@ -235,7 +235,7 @@ Above the request box, the screen lists the devices FR_OS's sensors flagged in t
 category plus Gemini, Claude, Copilot, Perplexity, DeepSeek, Mistral and Meta AI seen in the
 resolver's query log), a TLS fingerprint on the blocklist, TLS connections FR_OS's
 eBPF/XDP filter dropped in the kernel by server name, or -- on routers that opted
-into upload counting -- over 50 MB uploaded to AI services in 24 hours. An admin clicks
+into upload counting -- over 50 MiB uploaded to AI services in 24 hours. An admin clicks
 **Explain**:
 
 1. The webUI builds the device's **evidence bundle** from FR_OS's own sensor files
@@ -261,7 +261,7 @@ Bytes uploaded per device are counted too, on routers that opted in
 (`installer/install.sh --with-upload-bytes`): conntrack accounting plus a two-file FR_OS
 patch feed the `fr-ai-upload` collector, and the evidence maps each upload destination back
 to the AI service this device's own resolver replies named -- never an address. Over
-50 MB to AI services in 24 hours flags the device, with the note that short flows between
+50 MiB to AI services in 24 hours flags the device, with the note that short flows between
 samples are not seen, so every total is "at least", except a flow that disappears from
 the sample for more than an hour may be recounted once (review2 C1).
 
