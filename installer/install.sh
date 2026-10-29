@@ -48,6 +48,8 @@ UPLOAD_OWNED=/etc/fr_os/ai-perimeter-upload-owned
 # byte totals, so uninstall removes it (audit F-R2-05).
 UPLOAD_STATE_DIR=/var/lib/fr_os-ai-perimeter
 PYTHON=${PYTHON:-python3}
+# Every root-run "$PYTHON" uses -I (Muse review): nothing from the working
+# directory -- an unpacked bundle in /tmp -- or the user's site is imported.
 
 HERE=$(cd -- "$(dirname -- "$0")" && pwd)
 PATCH=$HERE/patches/conntrack-bytes.patch
@@ -74,9 +76,9 @@ require_fr_os() {
     systemctl cat fr-webui.service >/dev/null 2>&1 \
         || die "fr-webui.service not found: this is not an FR_OS router"
     getent group "$WEBUI_USER" >/dev/null || die "group $WEBUI_USER not found: this is not an FR_OS router"
-    "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 11))' \
+    "$PYTHON" -I -c 'import sys; sys.exit(sys.version_info < (3, 11))' \
         || die "$PYTHON is older than 3.11"
-    "$PYTHON" -c 'import frfw.webui.server' 2>/dev/null \
+    "$PYTHON" -I -c 'import frfw.webui.server' 2>/dev/null \
         || die "FR_OS's webUI (frfw.webui) is not installed for $PYTHON"
 }
 
@@ -184,7 +186,7 @@ YAML
 # carry bytes_out), "plain" (flows, but no bytes_out) or "empty" (no flows,
 # or no answer at all). Never fails.
 sample_kind() {
-    "$PYTHON" -c '
+    "$PYTHON" -I -c '
 try:
     from frfw.helper.client import conntrack_sample
     flows = conntrack_sample().get("flows")
@@ -202,7 +204,7 @@ else:
 
 install_upload_bytes() {
     command -v patch >/dev/null 2>&1 || die "patch(1) is needed for --with-upload-bytes"
-    frfw_dir=$("$PYTHON" -c 'import frfw, os; print(os.path.dirname(frfw.__file__))' 2>/dev/null) \
+    frfw_dir=$("$PYTHON" -I -c 'import frfw, os; print(os.path.dirname(frfw.__file__))' 2>/dev/null) \
         || die "frfw is not installed for $PYTHON"
 
     say "enabling conntrack accounting"
@@ -249,7 +251,7 @@ install_upload_bytes() {
         say "applying the conntrack patch to FR_OS (its integrity check will list 2 files)"
         out=$(patch -p1 -d "$frfw_dir/.." < "$PATCH" 2>&1) \
             || die "could not apply the conntrack patch: $out"
-        "$PYTHON" -c 'import frfw.conntrack, frfw.helper.server' 2>/dev/null \
+        "$PYTHON" -I -c 'import frfw.conntrack, frfw.helper.server' 2>/dev/null \
             || die "the patched FR_OS does not import"
     fi
 
@@ -295,7 +297,7 @@ remove_upload_bytes() {
                 || say "WARNING: could not restore nf_conntrack_acct to $prior"
         fi
     fi
-    frfw_dir=$("$PYTHON" -c 'import frfw, os; print(os.path.dirname(frfw.__file__))' 2>/dev/null) || true
+    frfw_dir=$("$PYTHON" -I -c 'import frfw, os; print(os.path.dirname(frfw.__file__))' 2>/dev/null) || true
     if [ -n "${frfw_dir:-}" ] \
             && grep -q 'bytes_out' "$frfw_dir/conntrack.py" 2>/dev/null; then
         # Review2 uninstall: --with-upload-bytes was used, so the FR_OS

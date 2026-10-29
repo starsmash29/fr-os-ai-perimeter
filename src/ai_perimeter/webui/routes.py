@@ -155,6 +155,12 @@ def _diff_lines(diff: str) -> list[tuple[str, str]]:
     return out
 
 
+def _plain(value: Any) -> str:
+    """Text for the admin's screen with no bidi controls (review2 C19): the
+    diff, findings and reasoning carry model-made strings too (Muse review)."""
+    return evidence.strip_bidi_controls(str(value))
+
+
 def _view(result: dict[str, Any]) -> tuple[dict[str, Any], Patch]:
     """The service's proposal, re-read: the patch through the closed
     format, everything else as plain strings, bidi-stripped (review2 C19)."""
@@ -166,23 +172,23 @@ def _view(result: dict[str, Any]) -> tuple[dict[str, Any], Patch]:
     findings = []
     for f in result.get("findings") or []:
         if isinstance(f, dict):
-            findings.append({k: str(f.get(k, "")) for k in ("rule", "kind", "severity", "message")})
+            findings.append({k: _plain(f.get(k, "")) for k in ("rule", "kind", "severity", "message")})
     handoffs = []
     for h in result.get("handoffs") or []:
         if isinstance(h, dict) and h.get("op") == "add_wireguard_peer":
-            handoffs.append({"name": str(h.get("name", "")), "address": str(h.get("address", ""))})
+            handoffs.append({"name": _plain(h.get("name", "")), "address": _plain(h.get("address", ""))})
     diff = result.get("diff") if isinstance(result.get("diff"), str) else ""
     reasoning = result.get("reasoning") if isinstance(result.get("reasoning"), str) else ""
     return {
         "status": status,
         "summary": evidence.strip_bidi_controls(patch.summary),
-        "operations": [_describe(op) for op in patch.ops],
-        "diff": _diff_lines(diff),
+        "operations": [_plain(_describe(op)) for op in patch.ops],
+        "diff": _diff_lines(_plain(diff)),
         "findings": findings[:40],
         "problems": _strings(result.get("problems")),
         "cautions": _strings(result.get("cautions")),
         "handoffs": handoffs[:10],
-        "reasoning": reasoning[:pipeline.MAX_REASONING + 10],
+        "reasoning": _plain(reasoning[:pipeline.MAX_REASONING + 10]),
     }, patch
 
 
@@ -303,6 +309,10 @@ def propose(
     username: str = Depends(require_login),
     raw: dict = Depends(get_raw_config),
 ):
+    if len(intent) > MAX_INTENT:
+        # Muse review: refused here, not after a megabyte crossed the socket.
+        return _page(request, username, raw, intent=intent[:MAX_INTENT],
+                     error=f"No proposal: the request is longer than {MAX_INTENT} characters")
     path, timeout = _socket(request)
     try:
         result = ask("propose_patch", {"intent": intent, "config": redacted(raw)},

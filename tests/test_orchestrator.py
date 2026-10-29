@@ -451,3 +451,28 @@ def test_a_worsened_lint_message_is_not_masked_by_the_old_one():
     shadowed = [f for f in p.findings if (f["rule"], f["kind"]) == ("x", "shadowed")]
     assert len(shadowed) == 1
     assert "'b'" in shadowed[0]["message"]
+
+
+@pytest.mark.parametrize("text", [
+    '{"summary": "x", "operations": [{"op": "set_ztna", "session_ttl_seconds": ' + "9" * 5000 + "}]}",
+    "{" + '"a": [' * 3000 + "]" * 3000 + "}",
+])
+def test_an_oversized_or_deep_answer_is_refused_not_a_crash(text):
+    """Muse review: Python's int digit limit raises a plain ValueError and
+    deep nesting a RecursionError; both are a PatchError (a refusal)."""
+    with pytest.raises(PatchError, match="not valid JSON"):
+        parse_patch(text)
+
+
+def test_an_error_echo_never_reprs_a_huge_value():
+    """Muse review: _shown cuts the value before repr, and stays short."""
+    shown = ops._shown("A" * 10_000_000)
+    assert len(shown) <= 40 and shown.startswith("'AAA")
+
+
+@pytest.mark.parametrize("reasoning", [{"text": "hi"}, 123, ["x"]])
+def test_non_text_reasoning_is_no_reasoning(reasoning):
+    """Muse review: reasoning that is not text is dropped, not a crash."""
+    patch = json.dumps({"summary": "block tiktok", "operations": [{"op": "block_app", "app": "tiktok"}]})
+    proposal = pipeline.propose("block tiktok", home(), lambda messages: (patch, reasoning))
+    assert proposal.reasoning == ""

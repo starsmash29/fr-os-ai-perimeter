@@ -353,3 +353,25 @@ def test_no_fr_os_file_is_patched():
     root = Path(__file__).parent.parent / "integration"
     patches = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.patch"))
     assert patches == ["fr_os/conntrack-bytes.patch"]
+
+
+def test_model_text_reaches_the_admin_without_bidi_controls(env):
+    """Muse review / review2 C19: the reasoning, like the summary, is shown
+    with bidi controls stripped, so it cannot reorder what the admin reads."""
+    client = login(env)
+    answer(env, {"summary": "block ‮tiktok", "operations": [{"op": "block_app", "app": "tiktok"}]},
+           reasoning="allow ‮everything")
+    page = post(client, "/ai-perimeter/propose", {"intent": "block tiktok"})
+    assert page.status_code == 200
+    assert "‮" not in page.text
+
+
+def test_an_overlong_request_is_refused_before_the_service(env):
+    """Muse review: a request past MAX_INTENT is refused by the screen
+    itself; the service (and the model) never sees it."""
+    from ai_perimeter.orchestrator.prompt import MAX_INTENT
+    client = login(env)
+    page = post(client, "/ai-perimeter/propose", {"intent": "a" * (MAX_INTENT + 1)})
+    assert page.status_code == 200
+    assert f"longer than {MAX_INTENT} characters" in page.text
+    assert env["provider"].requests == []

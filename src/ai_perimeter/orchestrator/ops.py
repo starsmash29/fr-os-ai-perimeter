@@ -97,6 +97,11 @@ def parse_patch(text: str) -> Patch:
         obj, _end = json.JSONDecoder().raw_decode(text, start)
     except json.JSONDecodeError as exc:
         raise PatchError(f"the model's answer is not valid JSON ({exc.msg})") from None
+    except (ValueError, RecursionError):
+        # Muse review: an int literal past Python's digit limit raises a
+        # plain ValueError, deep nesting a RecursionError; both are a
+        # refusal, never a crash of the service.
+        raise PatchError("the model's answer is not valid JSON (too large or too deep)") from None
     return patch_from_dict(obj)
 
 
@@ -242,7 +247,9 @@ def _bool(value: Any, what: str) -> bool:
 
 def _shown(value: Any) -> str:
     """A value echoed in an error, cut short: never the model's whole text."""
-    text = repr(value)
+    if isinstance(value, (str, bytes, list, tuple, dict)) and len(value) > 40:
+        value = value[:40] if not isinstance(value, dict) else dict(list(value.items())[:4])
+    text = repr(value)  # Muse review: cut first, never repr the whole of a huge value
     return text if len(text) <= 40 else text[:37] + "..."
 
 
