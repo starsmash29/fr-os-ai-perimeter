@@ -24,8 +24,12 @@ model's.
 (:mod:`.incidents`): five pseudonymised evidence bundles through the
 service's explanation loop. Its results file says ``"suite": "incidents"``
 and holds the verdict, the final severity and whether the router had to
-raise it, never the explanation's text. Files of the two suites are not
-merged.
+raise it, never the explanation's text.
+
+``--suite intents400`` runs the forty intents and 360 generated ones
+(:mod:`.generated`): the same judge, more devices, apps, time windows,
+phrasings and attacks. Its file says ``"suite": "intents400"``. Files of
+different suites are not merged.
 
 If nothing answers at the provider's address on the first case, the run
 stops there instead of writing a file of instant errors (a llama-server
@@ -49,8 +53,10 @@ from ..orchestrator import pipeline
 from ..service import PROPOSE_MAX_TOKENS
 from . import incidents
 from .cases import CASES, CATEGORIES, VERDICTS, Case, judge
+from .generated import CASES400
 
-SUITES = {"intents": (CASES, CATEGORIES), "incidents": (incidents.CASES, incidents.CATEGORIES)}
+SUITES = {"intents": (CASES, CATEGORIES), "intents400": (CASES400, CATEGORIES),
+          "incidents": (incidents.CASES, incidents.CATEGORIES)}
 
 Ask = Callable[[list[dict[str, str]]], tuple[str, str]]
 
@@ -124,7 +130,7 @@ def merge(files: list[dict[str, Any]]) -> dict[str, Any]:
     models, cases, results, ids = [], {}, [], set()
     suites = {data.get("suite", "intents") for data in files}
     if len(suites) > 1:
-        raise ValueError("the files are of different suites (intents and incidents)")
+        raise ValueError(f"the files are of different suites ({', '.join(sorted(suites))})")
     for data in files:
         for model in data["models"]:
             if model["id"] in ids:
@@ -135,7 +141,8 @@ def merge(files: list[dict[str, Any]]) -> dict[str, Any]:
             if cases.setdefault(case["id"], case) != case:
                 raise ValueError(f"case {case['id']!r} differs between files")
         results += data["results"]
-    suite = {"suite": "incidents"} if suites == {"incidents"} else {}
+    (only,) = suites
+    suite = {} if only == "intents" else {"suite": only}
     return {"generated": _now(), **suite, "models": models, "cases": list(cases.values()),
             "results": results}
 
@@ -233,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
     except NoProvider as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    if args.suite == "intents400":
+        data["suite"] = args.suite
     Path(args.out).write_text(json.dumps(data, indent=1) + "\n")
     print(summary(data))
     return 0

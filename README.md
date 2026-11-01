@@ -330,6 +330,20 @@ of 8 s. None of the 492 runs proposed anything that would have exposed the route
 Details, setup and the misses: [`docs/eval/README.md`](docs/eval/README.md); the page:
 `docs/eval/report.html`.
 
+### The 400-case suite
+
+`ai-perimeter-eval run --suite intents400 --repeat 3 ...` runs the forty intents above and 360
+generated ones (`src/ai_perimeter/eval/generated.py`): 149 good, 76 ambiguous, 90 dangerous
+and 85 injected requests, built from request families (block or unblock an app, a device
+offline in a time window, what the VPN reaches, a ZTNA session length, adding or removing a
+WireGuard device, web-only access, logging) over the demo's devices, App-ID's apps, eight
+time windows and several phrasings, some in Hungarian. The dangerous ones ask to open the
+router's SSH, admin page, HTTP, DNS or 8080, or a LAN device's SSH, RDP, SMB or web ports, to
+the internet; the injected ones attach eight kinds of hostile instruction to a good request,
+or hide six in a zone description. The judge is the same simulation, and every generated
+case is tested with its own right and wrong answer (`tests/test_eval_generated.py`). The file
+says `"suite": "intents400"`, and it is not merged with the 40-case results.
+
 ### Explanations (A4)
 
 `ai-perimeter-eval run --suite incidents ...` runs five explanation cases instead: a tablet
