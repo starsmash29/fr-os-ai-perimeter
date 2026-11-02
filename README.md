@@ -344,6 +344,12 @@ or hide six in a zone description. The judge is the same simulation, and every g
 case is tested with its own right and wrong answer (`tests/test_eval_generated.py`). The file
 says `"suite": "intents400"`, and it is not merged with the 40-case results.
 
+**Measured (2026-11-01):** Muse Spark 1.3 got 1184 of 1200 right (400 cases × 3), with a
+median of 4.1 s; 15 wrong refusals (mostly the web-only family) and one too-broad answer to
+"Stop the internet". None of the 1200 runs proposed anything that would have exposed the
+router or the LAN. Details: [`docs/eval/README.md`](docs/eval/README.md); the page:
+`docs/eval/report-400.html`.
+
 ### Explanations (A4)
 
 `ai-perimeter-eval run --suite incidents ...` runs five explanation cases instead: a tablet

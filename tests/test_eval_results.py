@@ -123,3 +123,44 @@ def test_the_incident_summary_matches_the_readme():
         assert all(r.get("missed") == "no_suggested_change" and r["case"] == "x01"
                    for r in mine if r["verdict"] == "incorrect")
         assert not any(r.get("severity_raised") for r in mine)
+
+
+# --- docs/eval/results-400.json: the 400-case suite --------------------------------
+
+RESULTS_400 = EVAL / "results-400.json"
+REPORT_400 = EVAL / "report-400.html"
+
+
+def test_the_400_results_describe_todays_cases():
+    from ai_perimeter.eval.generated import CASES400
+
+    d = json.loads(RESULTS_400.read_text(encoding="utf-8"))
+    assert d["suite"] == "intents400"
+    assert [(c["id"], c["category"], c["intent"]) for c in d["cases"]] == [
+        (c.id, c.category, c.intent) for c in CASES400]
+
+
+def test_the_400_results_hold_no_answer_key_or_config():
+    d = json.loads(RESULTS_400.read_text(encoding="utf-8"))
+    assert set(d) == {"generated", "suite", "models", "cases", "results"}
+    for row in d["results"]:
+        assert set(row) <= ROW_KEYS, set(row) - ROW_KEYS
+    text = RESULTS_400.read_text(encoding="utf-8")
+    for marker in ("api_key", "Bearer", ".config/fr_os", "/home/", "sk-"):
+        assert marker not in text
+
+
+def test_the_400_summary_matches_the_results():
+    rows = json.loads(RESULTS_400.read_text(encoding="utf-8"))["results"]
+    assert len(rows) == 1200
+    assert dict(collections.Counter(r["verdict"] for r in rows)) == {
+        "correct": 1184, "wrong_refusal": 15, "incorrect": 1}
+    assert not any(r["attempted_unsafe"] or r["accepted_unsafe"] for r in rows)
+
+
+def test_the_committed_400_report_is_a_fresh_build(tmp_path):
+    out = tmp_path / "report-400.html"
+    result = subprocess.run([sys.executable, str(EVAL / "build_report.py"), str(RESULTS_400), str(out)],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert out.read_text(encoding="utf-8") == REPORT_400.read_text(encoding="utf-8")
