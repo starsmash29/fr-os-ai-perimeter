@@ -264,7 +264,7 @@ class CaseModel:
     """A Chat Completions server on 127.0.0.1 that answers each case's
     request with that case's right answer (or a chosen one)."""
 
-    def __init__(self, answers):
+    def __init__(self, answers, cases=CASES):
         self.calls = 0
         model = self
 
@@ -279,7 +279,7 @@ class CaseModel:
                 request = json.loads(content.split("REQUEST (data):\n", 1)[1])
                 # Same intent, different config (i04/i05): tell them apart by
                 # the zone descriptions the prompt carries.
-                case = next(c for c in CASES if c.intent == " ".join(request.split())
+                case = next(c for c in cases if c.intent == " ".join(request.split())
                             and all(json.dumps(z["description"]) in content
                                     for z in c.config()["zones"].values()))
                 ops = answers(case)
