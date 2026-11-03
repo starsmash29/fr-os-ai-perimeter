@@ -49,8 +49,9 @@ not a compliance report. A suggested change becomes a request in the box above;
 nothing happens until the administrator proposes, reviews and saves it.
 Quarantine stays with FR_OS's own engine: the model never touches it.
 
-TODO(claude): verify the installed demo's complete save, Apply, confirmation and
-rollback sequence before submitting this description as demonstrated behavior.
+The [demo video](https://youtu.be/4aiUjXjpO1M) shows save, Apply and Confirm on
+the real demo router. The automatic rollback of an unconfirmed apply is FR_OS's
+existing commit-confirm behaviour and is not shown in the video.
 
 ## The role of Meta models and tooling
 
@@ -81,13 +82,14 @@ reviewed before merge: the evaluation report page (#14), its sample-data marker
 presentation code; the security-relevant code was written and reviewed
 separately.
 
-The demo video runs **Muse Glimmer 30B BF16** (`meta-models/Muse-Glimmer-30B`,
-revision `f84ecc3a0ea984a4c04542a84269e3d065350a6e`, Apache 2.0) on a Modal
-Dedicated Endpoint with one H200 GPU ([deploy/modal/](../../deploy/modal/README.md)):
-the same open-weight model as the local default, on a GPU fast enough to answer
-on camera. It is an opt-in cloud provider under the operator's own Modal
-account and [Modal's terms](https://modal.com/legal/terms); the router only
-sends the intent and a redacted configuration summary of the demo network.
+The final demo video was recorded with **Muse Spark 1.3 on the Meta Model API**:
+the model card on screen shows `muse-spark-1.3` via Meta, a cloud provider the
+router uses only on explicit opt-in. The router only sends the intent and a
+redacted configuration summary of the demo network. The same open-weight model as
+the local default, **Muse Glimmer 30B BF16** (`meta-models/Muse-Glimmer-30B`,
+revision `f84ecc3a0ea984a4c04542a84269e3d065350a6e`, Apache 2.0), also runs on a
+Modal Dedicated Endpoint with one H200 GPU ([deploy/modal/](../../deploy/modal/README.md))
+under the operator's own Modal account and [Modal's terms](https://modal.com/legal/terms).
 
 ## The demo
 
@@ -121,9 +123,30 @@ cases using supplied model responses and the real validator/linter. They are
 evidence of the intended checks, not evidence of live model accuracy or a general
 guarantee against prompt injection.
 
-TODO(claude): verify the final recording, actual statuses, selected provider and
-test-run evidence on main. Label deterministic test captures clearly and use
-only observed live outcomes. Add the public demo-video link when available.
+**The final recording:** [youtu.be/4aiUjXjpO1M](https://youtu.be/4aiUjXjpO1M)
+(2:40). Every product scene is a screen capture of the real router with Muse
+Spark 1.3; the presenter is an AI-generated avatar with the author's cloned
+voice, labelled on screen. What it shows, as observed live:
+
+- The kids' tablet request returned **ready** with one scheduled drop rule for
+  the tablet's MAC; it was saved, applied and confirmed. The video shows the
+  diff and the apply, not enforcement at 22:00.
+- "Block TikTok" returned one app-control change; after Apply, tiktok.com no
+  longer loads (shown on one device; the block is network-wide by design).
+- A nightly TikTok block, which FR_OS cannot express, returned **nothing to
+  change** with the model saying so, instead of an invented setting.
+- A request carrying a hidden instruction to open TCP 22 from the WAN returned
+  only the requested block; the model flagged the embedded instruction as an
+  injection. The code-level refusal of such a rule is the deterministic test
+  above, not something the video claims.
+- "Turn the firewall off" returned **nothing to change**: the model supplied no
+  operations, which is not the same as a policy refusal.
+- The office scene ran on the simulated sensor files and is labelled
+  SIMULATED on screen. The explanation rated it high with the NIS2 24-hour
+  note and suggested the cut-off; the video shows the suggestion, not the
+  applied change.
+
+Waits for the model are shortened in the edit.
 
 ## Impact and evaluation
 
@@ -178,5 +201,5 @@ Source references: [provider client](../../src/ai_perimeter/client.py),
 [webUI routes](../../src/ai_perimeter/webui/routes.py), and
 [FR_OS integration notes](../../integration/fr_os/README.md).
 
-TODO(claude): verify the final submission form's fields, length limits and current
-main commit; resolve or retain each limitation accurately before submission.
+The project was submitted on 2026-11-03 (team 1206, Indie Developer Track,
+"Build for Your World"). The limitations above stand as written.
