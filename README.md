@@ -5,6 +5,16 @@
   </picture>
 </p>
 
+# FR_OS AI-Perimeter
+
+**Talk to your firewall. Safe network for everyone. It proposes. You approve.**
+
+An open-source (AGPLv3) AI layer for [FR_OS](https://github.com/starsmash29/FR_OS-pblk), an
+open-source firewall/router OS, **running on a real router**: an ASRock Q1900M board with a
+Celeron J1900. It is not a simulated cloud service: every scene in the demo video is that
+router, its own webUI and its own sensors. The model runs **locally by default** (Muse Glimmer
+on your own hardware); a cloud model is opt-in.
+
 > **What existed before and what was built this week.** [FR_OS](https://github.com/starsmash29/FR_OS-pblk)
 > (the firewall/router OS: nftables, eBPF/XDP, the webUI, the anomaly signals) existed before the
 > Meta AI Developer Hackathon 2026 and is used here as a pinned dependency. **Everything in this
@@ -13,7 +23,28 @@
 > files ([`integration/fr_os/`](integration/fr_os/)), which FR_OS's integrity check (SEC-15)
 > then reports. The AI-Perimeter runs beside FR_OS.
 
-# FR_OS AI-Perimeter
+## The headline scenario: an attack on a chip-design firm (simulated)
+
+HSML, a fictional semiconductor-equipment company, is attacked through a fake job offer. On
+the router's **AI-Perimeter** screen:
+
+1. **The engineer's laptop** (`design-laptop`) opened the offer. Its loader phones home with a
+   TLS client whose fingerprint is on the threat-feed blocklist, and FR_OS's eBPF/XDP filter
+   drops those connections in the kernel.
+2. **The design file server** (`nas`) starts scanning new hosts and looking up random-looking
+   names that don't exist (DGA-style). FR_OS's AI IDS flags it.
+3. The admin clicks **Explain**. Muse reads a pseudonymised evidence bundle, rates the incident
+   **high**, maps it to NIS2 Art. 21(2)(b) and Art. 23 and NIST SP 800-53 SI-4 and IR-4, and
+   reminds the admin of NIS2's **24-hour early warning**.
+4. It suggests cutting the device off the internet, as words in the request box. **Nothing
+   changes until the admin proposes it, reviews the diff and approves it**; FR_OS applies it
+   with a timed automatic rollback.
+
+The scene is simulated: [`demo/shadow_ai/make_sensor_files.py --scenario office`](demo/shadow_ai/README.md)
+writes the sensor files with FR_OS's own detectors, and every name and domain is invented.
+Everything else, the router, the webUI, the evidence pipeline and the model calls, is real.
+
+## What it does
 
 Natural-language firewall changes as **validated, admin-approved config patches**, and local,
 human-readable explanations of what the router's anomaly signals saw.
@@ -224,9 +255,9 @@ is not the credential source for the sandboxed systemd service.
    then confirm the change; its commit-confirm flow rolls back an unconfirmed
    apply.
 
-TODO(claude): verify the complete installed webUI → save → Apply → confirm/rollback
-flow on the demo router. The source and tests describe these steps; this guide
-does not report an end-to-end deployment test.
+The demo video shows **Approve and save → Apply → Confirm** on the real demo router.
+The rollback of an unconfirmed apply is FR_OS's existing commit-confirm behaviour and
+is not shown in the video.
 
 ### What did the router see? (A4)
 
