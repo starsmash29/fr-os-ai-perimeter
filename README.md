@@ -9,6 +9,9 @@
 
 **Talk to your firewall. Safe network for everyone. It proposes. You approve.**
 
+▶ **[Watch the 2:40 demo video](https://youtu.be/4aiUjXjpO1M)** (the presenter is an AI-generated
+avatar with my own cloned voice; all product footage is the real router).
+
 An open-source (AGPLv3) AI layer for [FR_OS](https://github.com/starsmash29/FR_OS-pblk), an
 open-source firewall/router OS, **running on a real router**: an ASRock Q1900M board with a
 Celeron J1900. It is not a simulated cloud service: every scene in the demo video is that
