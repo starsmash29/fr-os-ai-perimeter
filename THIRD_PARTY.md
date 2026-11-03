@@ -69,9 +69,9 @@ They are not new direct AI-Perimeter dependencies.
 
 FR_OS's development extra repeats the `pytest>=8.0` and `httpx>=0.27`
 requirements listed above. The dependency versions are lower bounds, not
-resolved pins. This inventory is not a complete transitive or binary SBOM.
-TODO(claude): verify the exact installed versions, transitive packages and
-bundled native-library notices in the final distribution.
+resolved pins. This inventory is not a complete transitive or binary SBOM:
+exact installed versions, transitive packages and bundled native-library
+notices depend on the environment a distribution is built in.
 
 ## Meta models and provider terms
 

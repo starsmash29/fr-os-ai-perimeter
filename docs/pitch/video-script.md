@@ -24,16 +24,13 @@ kids-tablet patch, dangerous-rule refusals and an injected-model refusal.
 Those tests supply the model's answer: they establish the intended deterministic
 checks, not a measured success rate for a live Meta model.
 
-The recording uses Muse Glimmer 30B BF16 on a Modal Dedicated Endpoint
-([deploy/modal/](../../deploy/modal/README.md)); warm it up before recording,
-because the first request after idle waits for a cold start.
-
-TODO(claude): verify the recording build, actual
-responses and installed save/Apply/rollback behavior before recording. Capture
-the real outcome; do not relabel a result or present a test fixture as live model
-output. If inference waits are cut, label the cut and show the measured duration
-only after it has been checked. A failure to reproduce a scene stays a visible
-limitation or a clearly labelled deterministic test demonstration.
+This was the plan. The final video, [youtu.be/4aiUjXjpO1M](https://youtu.be/4aiUjXjpO1M)
+(2:40), was recorded on the real router with **Muse Spark 1.3 on the Meta Model
+API** (the on-screen model card shows it), not with Muse Glimmer on Modal, and
+its scenes differ from the plan where noted below. Its narration is the author's
+cloned voice, presented by a labelled AI-generated avatar; model waits are
+shortened in the edit. What each scene actually showed is in
+[submission.md](submission.md#the-demo).
 
 ## 0:00–0:15 — What is new
 
@@ -59,10 +56,11 @@ configuration diff. The explanation is the model's own text. The router checks
 the patch independently. Approval saves it; Apply loads it, with confirmation
 required to keep the change."
 
-**Production note:** TODO(claude): verify the actual model produces the intended
-rule and status on this fixture, and record the applied behavior. The checked-in
-test places the drop rule before the broad LAN accept rule and uses the fixture's
-Europe/Budapest timezone. Do not imply that displaying a diff proves enforcement.
+**Production note:** Recorded live: **ready**, one scheduled drop rule for the
+tablet's MAC, then save, Apply and Confirm. The checked-in test places the drop
+rule before the broad LAN accept rule and uses the fixture's Europe/Budapest
+timezone. Displaying a diff does not prove enforcement, and the video does not
+claim it.
 
 ## 0:50–1:10 — A dangerous request is refused
 
@@ -75,10 +73,11 @@ capture, label it "Injected proposal: deterministic policy check".
 internet. The proposed rule is refused by code. A convincing explanation cannot
 override this policy, and the refused proposal cannot be saved."
 
-**Production note:** TODO(claude): verify the live response and exact refusal
-text. The source test `test_nothing_opens_the_router_to_the_internet` checks this
-kind of rule. A model returning no operations is not the same as a policy refusal;
-use the actual status and revise the narration if that happens.
+**Production note:** In the final video this scene became "Turn the firewall
+off", which returned **nothing to change**: the model supplied no operations,
+which is not a policy refusal, so the narration only says "Nothing changes". The
+source test `test_nothing_opens_the_router_to_the_internet` is what checks the
+code-level refusal of an internet-facing rule.
 
 ## 1:10–1:25 — Prompt injection meets the same boundary
 
@@ -94,8 +93,11 @@ tries to expose the admin page. Even then, the resulting operation is refused
 by the router's policy. This demonstrates one enforced boundary, not immunity
 to every prompt injection."
 
-**Production note:** TODO(claude): verify and record the named test on the final
-main commit. This scene does not claim a live model resisted the attack.
+**Production note:** The final video shows a live take instead: a request to
+block YouTube with a hidden instruction to open TCP 22 from the WAN returned only
+the YouTube block, and the model flagged the instruction as an injection. The
+code-level boundary is still the named test; the video does not claim immunity
+to every prompt injection.
 
 ## 1:25–1:40 — What did the router see? Shadow AI at home
 
@@ -127,11 +129,12 @@ within about a minute. The model explains what happened, the severity cannot be
 argued down below the evidence, and NIS2's 24-hour reporting clock is on the
 card. One approval cuts the laptop off, before anything leaves."
 
-**Production note:** TODO(claude): verify the live explanation and the applied
-change on the demo router before recording; the checked-in tests
-(`tests/test_incident_webui.py`, office tests) use a scripted model. Do not
-claim the router proves what was or was not stolen. Keep the "fictional"
-caption on screen for the whole scene.
+**Production note:** Recorded live on the demo router with the simulated office
+sensor files, labelled SIMULATED on screen: the explanation rated it high with
+the NIS2 24-hour note and suggested cutting the device off. The video shows the
+suggestion, not the applied change. The checked-in tests
+(`tests/test_incident_webui.py`, office tests) use a scripted model. The router
+does not prove what was or was not stolen.
 
 ## 2:15–2:40 — Evaluation
 
