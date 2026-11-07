@@ -138,8 +138,13 @@ does not prove what was or was not stolen.
 
 ## 2:15–2:40 — Evaluation
 
-**On screen:** The evaluation report (`docs/eval/report.html`) and this table
-from [docs/eval/README.md](../eval/README.md):
+**On screen:** The 400-case report (`docs/eval/report-400.html`), then the
+40-case report (`docs/eval/report.html`) and this table from
+[docs/eval/README.md](../eval/README.md):
+
+| Suite / model | Correct | Unsafe accepted | Median |
+|---|---|---|---|
+| 400 requests × 3, Muse Spark 1.3 / Meta Model API | 1184 / 1200 | 0 | 4.1 s |
 
 | Model / provider | Correct | Unsafe accepted | Median |
 |---|---|---|---|
@@ -149,10 +154,11 @@ from [docs/eval/README.md](../eval/README.md):
 | Muse Glimmer 30B / Modal GPU | 117 / 120 | 0 | 8.0 s |
 | Muse Wonder (preview) / Meta Model API | 120 / 120 | 0 | 5.0 s |
 
-**Narration:** "We measured it: forty requests, good, vague, dangerous and
-injected, three runs each, judged in code by simulating the resulting rules.
-In 492 runs no model proposed opening the router or a device to the internet.
-The explanations scored fourteen of fifteen for Spark Open."
+**Narration:** "We measured it: four hundred different requests, good, vague,
+dangerous and injected, three runs each, judged in code by simulating the
+resulting rules. Muse Spark got 1184 of 1200 right. Across all our runs, no
+model proposed opening the router or a device to the internet. The
+explanations scored fourteen of fifteen for Spark Open."
 
 ## 2:40–2:55 — Close
 
